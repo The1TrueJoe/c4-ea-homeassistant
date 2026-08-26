@@ -1,0 +1,3 @@
+[submodule "openHC"]
+	path = openHC
+	url = https://github.com/The1TrueJoe/openHC.git

@@ -10,14 +10,18 @@ Assistant actually running and reachable.
 
 ## Relationship to openHC
 
-This repo does not vendor or fork openHC. It consumes its outputs:
+openHC is vendored as a git submodule at [`openHC/`](openHC), pinned to a
+specific upstream commit so builds are reproducible. Pull upstream changes
+with:
 
-- the built kernel (`bzImage`) + CEFDK container wrapping from
-  `board/ea1` / `board/ea3` in openHC
-- the Buildroot `BR2_EXTERNAL` conventions (`*_defconfig`, `rootfs-overlay/`,
-  `post-image.sh`) that openHC's board ports already use
+```sh
+git submodule update --remote openHC
+git add openHC && git commit -m "openHC: bump to upstream <sha>"
+```
 
-Point `OPENHC_DIR` at a local openHC checkout to build against it.
+This repo builds on openHC's Buildroot `BR2_EXTERNAL` conventions
+(`*_defconfig`, `rootfs-overlay/`, `post-image.sh`) and its EA1/EA3 board
+output (kernel `bzImage` + CEFDK container wrapping).
 
 ## Status
 
