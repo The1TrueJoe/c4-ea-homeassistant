@@ -1,0 +1,12 @@
+# c4-ea-homeassistant — EA1 + Home Assistant deltas.
+#
+# build/build.sh concatenates this AFTER openHC's ea-common_defconfig and
+# ea1_defconfig, so only what Home Assistant needs beyond openHC's bare
+# kernel-up EA1 build belongs here. This file does not touch openHC — anything
+# the vendor build doesn't need (starting with a target Python) lives on this
+# side of the split.
+
+# python3: openHC's EA1 build has no target-side use for it (netboot/serial
+# tooling runs on the host). Home Assistant Core needs it on-target, so it
+# starts in this repo rather than upstream.
+BR2_PACKAGE_PYTHON3=y

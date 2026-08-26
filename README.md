@@ -23,24 +23,50 @@ This repo builds on openHC's Buildroot `BR2_EXTERNAL` conventions
 (`*_defconfig`, `rootfs-overlay/`, `post-image.sh`) and its EA1/EA3 board
 output (kernel `bzImage` + CEFDK container wrapping).
 
-## Status
+## How the build is split
 
-Not started. Planning stage — see [openHC's README](https://github.com/The1TrueJoe/openHC#board-support)
-for what's already proven (EA1 netboots to a shell) vs. still open (storage,
-EA3 second NIC).
-
-## Plan
-
-- [ ] Persistent root on eMMC for EA1 (openHC currently ships initramfs-only —
-      storage is called out there as "comes later")
-- [ ] Buildroot overlay / package for Home Assistant Core (or point at
-      HA's own arm/x86 container path — TBD, needs a size/RAM budget check
-      against the EA1's hardware first)
-- [ ] Bring-up docs specific to this repo (flashing, first boot, recovery)
-
-## Layout (placeholder)
+openHC's `board/` is one Buildroot `BR2_EXTERNAL` tree (`OPENHC`). This repo
+is a second one (`OHCHA`), passed to Buildroot alongside it
+(`BR2_EXTERNAL="openHC/board board"`). `build/build.sh` builds the effective
+defconfig the same way openHC concatenates its own family + board files, just
+with a third layer added on top:
 
 ```
-overlay/     rootfs additions on top of openHC's board output (HA install, systemd units)
-docs/        bring-up notes specific to this repo
+openHC/board/ea-common/ea-common_defconfig   shared EA family base (upstream, untouched)
++ openHC/board/ea1/ea1_defconfig             EA1-only deltas (upstream, untouched)
++ board/ea1-ha/ea1-ha_defconfig              Home Assistant deltas (this repo)
+```
+
+Anything the bare kernel-up build doesn't need — starting with a target
+Python — is added in `board/ea1-ha/ea1-ha_defconfig` here, not upstream.
+openHC stays a generic Control4 kernel-up build with no Home Assistant
+awareness; this repo is the only place that knows why the Python is there.
+
+```sh
+git submodule update --init openHC
+make image        # Docker Buildroot build, see build/build.sh
+```
+
+## Status
+
+- [x] Build layering (BR2_EXTERNAL stacked on openHC, `board/ea1-ha`) — python3
+      added as the first delta, not yet verified with a full build
+- [ ] Persistent root on eMMC for EA1 (openHC currently ships initramfs-only —
+      the prerequisite for HA to keep any state across reboots; needs porting
+      the eMMC ext4 approach openHC already proved on ca1)
+- [ ] Home Assistant Core itself on-target — feasibility open: cross-compiled
+      musl/i686 wheels for HA's dependency tree (aiohttp, cryptography,
+      sqlalchemy, ...) are not a given; may need building from source under
+      Buildroot's python3 package infra, or reconsidering the toolchain
+- [ ] Bring-up docs specific to this repo (flashing, first boot, recovery)
+
+## Layout
+
+```
+board/
+  external.desc, Config.in, external.mk   this repo's BR2_EXTERNAL tree (name: OHCHA)
+  ea1-ha/
+    ea1-ha_defconfig                      HA deltas on top of openHC's ea-common + ea1
+build/
+  build.sh, Dockerfile                    same Docker/cache-mount model as openHC
 ```

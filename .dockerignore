@@ -1,0 +1,9 @@
+.git
+openHC/.git
+output
+dl
+openHC/output
+openHC/dl
+*.img
+*.bin
+docs
