@@ -33,18 +33,39 @@ jobs:
     outputs:
       boards: ${{ steps.pick.outputs.boards }}
     steps:
+      # openHC sources sgx545-ce's Config.in, so recursive.
       - uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive
 
-      # Seconds: the HA layer composes onto every board.
-      - name: Compose every board's defconfig
+      - name: Fetch Buildroot (ref from openHC)
+        run: |
+          set -e
+          ref=$(sed -n 's/^ARG BUILDROOT_REF=//p' openHC/build/Dockerfile)
+          git init -q "$HOME/buildroot"
+          git -C "$HOME/buildroot" fetch -q --depth 1 https://github.com/buildroot/buildroot "$ref"
+          git -C "$HOME/buildroot" checkout -q FETCH_HEAD
+          for p in openHC/build/buildroot-patches/*.patch; do
+            [ -e "$p" ] || continue
+            patch -d "$HOME/buildroot" -p1 --forward --batch < "$p"
+          done
+
+      # A minute: compose each board with the HA layer, then let kconfig resolve
+      # it. An unmet `depends on` drops a symbol silently, so check it survived.
+      - name: Resolve every board's config
         run: |
           set -euo pipefail
           for b in $(build/boards.sh); do
-            OHC_DEFCONFIG_ONLY=1 BOARD="$b" build/build.sh 2>/dev/null \
-              | grep -q '^# --- downstream layer: .*/board/ha_defconfig ---$' \
-              || { echo "::error::$b: HA layer missing from the composed defconfig"; exit 1; }
+            out="$RUNNER_TEMP/cfg/$b"
+            OHC_DEFCONFIG_ONLY=1 BOARD="$b" BR2_OUTPUT_DIR="$out" build/build.sh >/dev/null
+            make -s -C "$HOME/buildroot" O="$out" \
+              BR2_EXTERNAL="$PWD/openHC/board $PWD/board" \
+              defconfig BR2_DEFCONFIG="$out/openhc-$b.defconfig" >/dev/null
+            for s in BR2_PACKAGE_HA_CORE BR2_PACKAGE_PYTHON3_SSL BR2_PACKAGE_PYTHON_PIP BR2_PACKAGE_CA_CERTIFICATES; do
+              grep -q "^$s=y$" "$out/.config" || { echo "::error::$b: $s not set after kconfig"; exit 1; }
+            done
+            grep -q '^BR2_TARGET_ROOTFS_EXT2_SIZE="768M"$' "$out/.config" \
+              || { echo "::error::$b: rootfs size not taken from the HA layer"; exit 1; }
             echo ">> $b ok"
           done
 

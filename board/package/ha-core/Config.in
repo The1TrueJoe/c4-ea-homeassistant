@@ -1,0 +1,30 @@
+config BR2_PACKAGE_HA_CORE
+	bool "ha-core"
+	depends on BR2_x86_64 # PyPI manylinux_x86_64 wheels
+	depends on BR2_TOOLCHAIN_USES_GLIBC
+	select BR2_PACKAGE_CA_CERTIFICATES
+	select BR2_PACKAGE_PYTHON3
+	select BR2_PACKAGE_PYTHON3_PY_PYC
+	select BR2_PACKAGE_PYTHON3_SSL
+	select BR2_PACKAGE_PYTHON3_SQLITE
+	select BR2_PACKAGE_PYTHON3_ZLIB
+	select BR2_PACKAGE_PYTHON3_BZIP2
+	select BR2_PACKAGE_PYTHON3_XZ
+	select BR2_PACKAGE_PYTHON3_ZSTD
+	select BR2_PACKAGE_PYTHON3_PYEXPAT
+	select BR2_PACKAGE_PYTHON3_DECIMAL
+	select BR2_PACKAGE_PYTHON3_UNICODEDATA
+	select BR2_PACKAGE_PYTHON_PIP
+	help
+	  Home Assistant Core, installed on first boot into a venv on
+	  the persistent root (/data/ha) from PyPI wheels, then run as
+	  a service on :8123. The image carries Python, the installer
+	  and the init script; the HA version is HA_CORE_HA_VERSION.
+
+config BR2_PACKAGE_HA_CORE_HA_VERSION
+	string "Home Assistant version"
+	default "2026.10.4"
+	depends on BR2_PACKAGE_HA_CORE
+	help
+	  The homeassistant release the box installs. Bumping it
+	  upgrades the venv in place on the next boot.

@@ -4,16 +4,10 @@
 # board is being built, so it wins every assignment. Board differences stay in
 # openHC; only what HA needs on top of an openHC EA image goes here.
 
-# EA userspace is x86_64 glibc, so HA's manylinux wheels install with pip.
-BR2_PACKAGE_PYTHON3=y
-BR2_PACKAGE_PYTHON3_PY_PYC=y
-BR2_PACKAGE_PYTHON3_SSL=y
-BR2_PACKAGE_PYTHON3_SQLITE=y
-BR2_PACKAGE_PYTHON3_ZLIB=y
-BR2_PACKAGE_PYTHON3_BZIP2=y
-BR2_PACKAGE_PYTHON3_XZ=y
-BR2_PACKAGE_PYTHON3_ZSTD=y
-BR2_PACKAGE_PYTHON3_PYEXPAT=y
-BR2_PACKAGE_PYTHON3_DECIMAL=y
-BR2_PACKAGE_PYTHON3_UNICODEDATA=y
-BR2_PACKAGE_PYTHON_PIP=y
+# HA Core: Python + installer + init script; HA itself installs on first boot
+# (package/ha-core).
+BR2_PACKAGE_HA_CORE=y
+
+# Room for Python in the image (openHC's emmc feature leaves this to the layer
+# that needs it). S03growfs still grows / to the whole partition on first boot.
+BR2_TARGET_ROOTFS_EXT2_SIZE="768M"

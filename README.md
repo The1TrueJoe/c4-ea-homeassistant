@@ -74,14 +74,37 @@ A full Buildroot build is heavy: prefer CI.
 
 ## What this layer adds
 
+Home Assistant Core, as the `ha-core` package (`board/package/ha-core`):
+
 - Python 3.14 with the stdlib modules HA uses (ssl, sqlite3, zlib/bz2/lzma/zstd,
-  expat, decimal, unicodedata) and pip.
+  expat, decimal, unicodedata), pip and the CA bundle.
+- `S97homeassistant`. On the first boot it runs `/opt/ha/bin/ha-install`, which
+  installs `homeassistant==<version>` into a venv at `/data/ha/venv` from
+  PyPI, then starts `hass` on **:8123** with its config in `/data/ha/config`.
+  A crash restarts it; HA's own restart from the UI happens in place.
+- The HA version is `BR2_PACKAGE_HA_CORE_HA_VERSION` (2026.10.4). Changing it
+  upgrades the venv on the next boot.
+
+The install happens on the box, not in the image. HA's tree is several hundred
+MB, and the EA rootfs is also a RAM initramfs. Checked off-box for 2026.10.4 on
+Python 3.14.10 / glibc 2.44: all 100 pinned dependencies have x86_64 manylinux
+wheels, except PyRIC, a pure-Python sdist that needs no compiler. The first
+boot needs internet and a correct clock (openHC's ntpd); progress goes to
+`/data/ha/install.log`, and HA's own output goes to syslog as `homeassistant`.
+
+Caveats:
+
+- `/data` is on the eMMC root (p1). **Reflashing p1 wipes the HA config**, so
+  take a backup from HA first.
+- The CE5310 is a Bonnell Atom: x86-64 without SSE4.x or POPCNT. A wheel built
+  for x86-64-v2 or newer dies with SIGILL. Core's wheels are not known to be
+  built that way, but an integration's dependency could be.
 
 ## Status
 
 - [x] Builds on top of current openHC, every EA board, via openHC's downstream hook
-- [ ] Home Assistant Core on the box: a venv on the eMMC, wheels from PyPI.
-      Not yet installed or started by the image.
+- [x] Home Assistant Core installs on first boot and runs as a service
+      (not yet run on hardware)
 - [ ] Sendspin player (Music Assistant multi-room) against
       [`aiosendspin`](https://github.com/Sendspin-Protocol/sendspin), output
       through openHC's ALSA setup. Not started.
@@ -91,6 +114,7 @@ A full Buildroot build is heavy: prefer CI.
 ```
 board/
   ha_defconfig                            the Home Assistant layer
+  package/ha-core/                        Python deps, installer, init script
   external.desc, Config.in, external.mk   this repo's BR2_EXTERNAL tree (OHCHA)
 build/
   build.sh      runs openHC/build/build.sh with the HA layer
