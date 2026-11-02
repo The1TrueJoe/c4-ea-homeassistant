@@ -1,0 +1,246 @@
+# openHC EA images with the Home Assistant layer, one job per EA board openHC
+# defines. Mirrors openHC's ci.yml images-build job; the Buildroot ref and the
+# release-cache helper come from the openHC submodule.
+#
+# Caches: dl/ in the Actions cache; each board's output tree and ccache on this
+# repo's `ci-cache` pre-release (openHC/.github/scripts/release-cache.sh), saved
+# by main only. The first run on a new Buildroot ref is a cold build.
+
+name: images
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      board:
+        description: "Single EA board to build (blank = all)"
+        required: false
+  release:
+    types: [published]
+
+concurrency:
+  group: images-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  boards:
+    runs-on: ubuntu-latest
+    outputs:
+      boards: ${{ steps.pick.outputs.boards }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      # Seconds: the HA layer composes onto every board.
+      - name: Compose every board's defconfig
+        run: |
+          set -euo pipefail
+          for b in $(build/boards.sh); do
+            OHC_DEFCONFIG_ONLY=1 BOARD="$b" build/build.sh 2>/dev/null \
+              | grep -q '^# --- downstream layer: .*/board/ha_defconfig ---$' \
+              || { echo "::error::$b: HA layer missing from the composed defconfig"; exit 1; }
+            echo ">> $b ok"
+          done
+
+      - name: Pick boards
+        id: pick
+        run: |
+          if [ -n "${{ github.event.inputs.board }}" ]; then
+            echo "boards=[\"${{ github.event.inputs.board }}\"]" >> "$GITHUB_OUTPUT"
+          else
+            echo "boards=$(build/boards.sh | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+          fi
+
+  images:
+    needs: boards
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        board: ${{ fromJSON(needs.boards.outputs.boards) }}
+    steps:
+      # openHC sources sgx545-ce's Config.in, so recursive.
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Buildroot ref (from openHC)
+        run: |
+          ref=$(sed -n 's/^ARG BUILDROOT_REF=//p' openHC/build/Dockerfile)
+          [ -n "$ref" ] || { echo "::error::no BUILDROOT_REF in openHC/build/Dockerfile"; exit 1; }
+          echo "BUILDROOT_REF=$ref" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: openHC/packages/webd/ui/package-lock.json
+
+      # openHC's daemons are staged into its overlay before Buildroot runs;
+      # without this the image has no iod/webd.
+      - name: Stage the openHC daemons into the rootfs overlay
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl-tools
+          rustup target add x86_64-unknown-linux-musl
+          export CC_x86_64_unknown_linux_musl=musl-gcc
+          bash openHC/packages/build.sh "${{ matrix.board }}"
+          ls -l openHC/board/common/rootfs-overlay/opt/ohc/bin/
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex git rsync unzip wget cpio file figlet zip \
+            python3 libncurses-dev libssl-dev libelf-dev pkg-config ca-certificates perl patch xz-utils
+
+      - name: Restore Buildroot downloads
+        id: dlcache
+        uses: actions/cache/restore@v4
+        with:
+          path: dl
+          key: dl-${{ env.BUILDROOT_REF }}-${{ hashFiles('openHC/board/**/*_defconfig', 'openHC/packages/**/*.mk', 'openHC/packages/**/*.hash', 'board/*_defconfig') }}
+          restore-keys: |
+            dl-${{ env.BUILDROOT_REF }}-
+
+      - name: Restore Buildroot output tree
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash openHC/.github/scripts/release-cache.sh restore out-${{ matrix.board }}-${{ env.BUILDROOT_REF }} output/build/${{ matrix.board }}
+
+      - name: Restore ccache
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash openHC/.github/scripts/release-cache.sh restore ccache-${{ matrix.board }}-${{ env.BUILDROOT_REF }} .ccache
+
+      - name: Fetch Buildroot
+        run: |
+          set -e
+          git init -q "$HOME/buildroot"
+          git -C "$HOME/buildroot" fetch -q --depth 1 \
+            https://github.com/buildroot/buildroot "$BUILDROOT_REF"
+          git -C "$HOME/buildroot" checkout -q FETCH_HEAD
+          for p in openHC/build/buildroot-patches/*.patch; do
+            [ -e "$p" ] || continue
+            echo ">> buildroot patch: ${p##*/}"
+            patch -d "$HOME/buildroot" -p1 --forward --batch < "$p"
+          done
+
+      # Release tag, else <openHC sha>-ha-<this sha>; post-build stamps it into
+      # /etc/openhc-release.
+      - name: Compute version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            v="${{ github.event.release.tag_name }}"
+          else
+            v="$(git -C openHC rev-parse --short HEAD)-ha-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      # The on-panel WPE/SGX i386 sysroots, from openHC main's latest successful
+      # sgx-wpe.yml / sgx-gpu.yml runs. Absent => no on-panel browser, not a failure.
+      - name: Fetch the on-panel WPE/SGX sysroot
+        id: sgxsr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          grab() {  # $1=workflow  $2=artifact  $3=GITHUB_OUTPUT var
+            run=$(gh run list -R The1TrueJoe/openHC --workflow="$1" --branch main \
+                    --status success --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || true)
+            [ -n "$run" ] || { echo ">> no successful openHC $1 run — $2 absent"; return 0; }
+            d="$RUNNER_TEMP/sgxsr/$2"; rm -rf "$d"; mkdir -p "$d"
+            gh run download "$run" -R The1TrueJoe/openHC -n "$2" -D "$d" 2>/dev/null \
+              || { echo ">> $2 not downloadable from openHC run $run — absent"; return 0; }
+            f=$(find "$d" -name '*.tar.gz' | head -1)
+            [ -n "$f" ] && { echo "$3=$f" >> "$GITHUB_OUTPUT"; echo ">> $2 -> $f"; }
+          }
+          grab sgx-wpe.yml wpe-i386-sysroot wpe
+          grab sgx-gpu.yml sgx-i386-sysroot i386
+
+      # Runs out of time as a FAILURE (not a cancel) so main still saves the tree
+      # and a re-run resumes from it.
+      - name: Build ${{ matrix.board }}
+        env:
+          OHC_VERSION: ${{ steps.ver.outputs.version }}
+          OHC_SGX_WPE_SYSROOT: ${{ steps.sgxsr.outputs.wpe }}
+          OHC_SGX_I386_SYSROOT: ${{ steps.sgxsr.outputs.i386 }}
+          BR2_CCACHE_DIR: ${{ github.workspace }}/.ccache
+        run: |
+          rc=0
+          BUILDROOT_DIR="$HOME/buildroot" BOARD="${{ matrix.board }}" \
+            timeout --signal=INT --kill-after=2m 325m bash ./build/build.sh || rc=$?
+          [ "$rc" -eq 124 ] && echo "::error title=build-timeout::${{ matrix.board }} ran out of its 325 minutes"
+          exit "$rc"
+
+      # Same bundle shape as openHC's (images/ zipped flat), so the openHC
+      # flasher installs it: make flash HOST=<ip> IMAGES=<zip>.
+      - name: Bundle images
+        id: bundle
+        run: |
+          set -e
+          bundle="openhc-ha-${{ matrix.board }}-${{ steps.ver.outputs.version }}.zip"
+          ( cd "output/build/${{ matrix.board }}/images" && zip -r -X "$GITHUB_WORKSPACE/$bundle" . )
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+          ls -l "$bundle"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openhc-ha-${{ matrix.board }}
+          path: ${{ steps.bundle.outputs.bundle }}
+          retention-days: 14
+          if-no-files-found: error
+
+      # Cache saves: main only, and not on cancel (a killed Buildroot tree
+      # poisons the next run). target/ and staging/ must stay; see openHC ci.yml.
+      - name: Trim the output tree before caching
+        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: |
+          O=output/build/${{ matrix.board }}
+          [ -d "$O" ] || exit 0
+          rm -rf "$O"/build/linux-* "$O"/images
+
+      - name: Save Buildroot downloads (main)
+        if: ${{ !cancelled() && steps.dlcache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: dl
+          key: dl-${{ env.BUILDROOT_REF }}-${{ hashFiles('openHC/board/**/*_defconfig', 'openHC/packages/**/*.mk', 'openHC/packages/**/*.hash', 'board/*_defconfig') }}
+
+      - name: Save Buildroot output tree (main)
+        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash openHC/.github/scripts/release-cache.sh save out-${{ matrix.board }}-${{ env.BUILDROOT_REF }} output/build/${{ matrix.board }}
+
+      - name: Save ccache (main)
+        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash openHC/.github/scripts/release-cache.sh save ccache-${{ matrix.board }}-${{ env.BUILDROOT_REF }} .ccache
+
+      - name: Attach to release
+        if: success() && github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "${{ steps.bundle.outputs.bundle }}" --clobber
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildlog-${{ matrix.board }}
+          path: |
+            output/build/*/build/*/config.log
+            output/build/${{ matrix.board }}/*.log
+          retention-days: 7
+          if-no-files-found: ignore

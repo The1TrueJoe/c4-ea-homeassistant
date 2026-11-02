@@ -1,109 +1,100 @@
 # c4-ea-homeassistant
 
-Home Assistant on Control4 EA-series controllers, built on top of
-[openHC](https://github.com/The1TrueJoe/openHC)'s bare kernel + rootfs.
+Home Assistant on Control4 EA-series controllers: [openHC](https://github.com/The1TrueJoe/openHC)'s
+EA images with one layer added on top.
 
-openHC gets a mainline kernel and an initramfs shell netbooting on EA1
-hardware (proven) and building-but-unproven on EA3 (Wi-Fi/Ethernet, SSH, no
-vendor firmware). This repo picks up from there: persistent storage on the
-eMMC, a real root filesystem, and Home Assistant actually running and
-reachable.
+## How it fits together
 
-## Relationship to openHC
+openHC owns everything about the hardware: the boards, their differences
+(Wi-Fi, switch, PoE, DSP, secure-boot fuse), the kernel, the features and the
+daemons. This repo produces the same EA images with a Home Assistant layer
+appended, and nothing else.
 
-openHC is vendored as a git submodule at [`openHC/`](openHC), pinned to a
-specific upstream commit so builds are reproducible. Pull upstream changes
-with:
+- `openHC/` is a git submodule pinned to an openHC commit.
+- `board/ha_defconfig` is the only build input this repo adds. openHC's own
+  `build/build.sh` composes the board as usual (common, `ea/common`, features,
+  board) and appends this layer last through its downstream hook
+  (`OHC_EXTRA_DEFCONFIG`, with `board/` as a second `BR2_EXTERNAL` tree via
+  `OHC_EXTRA_EXTERNAL`).
+- `BOARD` is any openHC EA board (`openHC/board/ea/<board>`). The list comes
+  from the submodule, so new openHC boards build here without changes here:
+
+  ```sh
+  make boards      # ea1-v1 ea1-v2 ea1-v2-poe ea3-v1 ea3-v2 today
+  ```
+
+Bump openHC:
 
 ```sh
 git submodule update --remote openHC
-git add openHC && git commit -m "openHC: bump to upstream <sha>"
+git submodule update --init --recursive
+git add openHC && git commit -m "openHC: bump to <sha>"
 ```
 
-This repo builds on openHC's Buildroot `BR2_EXTERNAL` conventions
-(`*_defconfig`, `rootfs-overlay/`, `post-image.sh`) and its EA1/EA3 board
-output (kernel `bzImage` + CEFDK container wrapping).
+The Buildroot ref and patch set follow the submodule (read from
+`openHC/build/Dockerfile` and `openHC/build/buildroot-patches/`).
 
-## How the build is split
+## Building
 
-openHC's `board/` is one Buildroot `BR2_EXTERNAL` tree (`OPENHC`). This repo
-is a second one (`OHCHA`), passed to Buildroot alongside it
-(`BR2_EXTERNAL="openHC/board board"`). `build/build.sh` builds the effective
-defconfig the same way openHC concatenates its own family + board files, just
-with a third layer added on top:
-
-```
-openHC/board/ea-common/ea-common_defconfig   shared EA family base (upstream, untouched)
-+ openHC/board/<ea1|ea3>/..._defconfig       board deltas (upstream, untouched)
-+ board/<BOARD>/..._defconfig                Home Assistant deltas (this repo)
-```
-
-Anything the bare kernel-up build doesn't need — starting with a target
-Python — is added in `board/<BOARD>/<BOARD>_defconfig` here, not upstream.
-openHC stays a generic Control4 kernel-up build with no Home Assistant
-awareness; this repo is the only place that knows why the Python is there.
-`BOARD` selects `ea1-ha` or `ea3-ha` (default `ea3-ha` — see below).
+CI builds every EA board on each push and PR (`.github/workflows/images.yml`)
+and uploads one zip per board, `openhc-ha-<board>-<version>.zip`. That is the
+same bundle layout as openHC's own images, so openHC's flasher installs it:
 
 ```sh
-git submodule update --init openHC
-make image [BOARD=ea3-ha|ea1-ha]   # Docker Buildroot build, see build/build.sh
+make -C openHC flash HOST=<ip> IMAGES=/path/to/openhc-ha-ea3-v2-....zip
 ```
 
-## Board: EA3
+Publishing a release attaches the zips to it. Locally:
 
-**EA3 is the hardware actually on the bench**, so it's the default `BOARD`.
-Read [openHC's `docs/ea3-recon.md`](openHC/docs/ea3-recon.md) before assuming
-anything works — as of the openHC commit this repo is pinned to, EA3 is
-**unproven**: no EA3 has been netbooted, and the NIC (`e1000`) probes with a
-bare `-EIO` and no `eth0` on the mainline kernel. That's an openHC-side bug,
-not a Home Assistant one — it blocks everything downstream (there's no
-network to even reach the box) and needs solving there first.
+```sh
+git submodule update --init --recursive
+make defconfig BOARD=ea3-v2   # print the composed defconfig, build nothing
+make daemons   BOARD=ea3-v2   # stage openHC's daemons (rustup + node)
+make image     BOARD=ea3-v2   # Docker Buildroot build
+```
 
-## Audio: ALSA vs. Sendspin
+A full Buildroot build is heavy: prefer CI.
 
-The EA3 (and EA5) route audio through an Analog Devices ADAU1451 SigmaDSP —
-recon is solid (`openHC/docs/ea3-recon.md#audio`), but nothing has been
-ported to mainline yet. Split the same way as everything else:
+## What openHC already gives Home Assistant
 
-- **Getting sound out of the box at all (ALSA/kernel/DSP firmware loading)
-  is generic hardware bring-up and belongs in openHC**, not here — same as
-  the NIC and storage work. See the "Mainline bring-up: what's missing"
-  note in that doc for the two candidate approaches (a real ASoC codec
-  driver, or a userspace SigmaDSP loader bypassing ASoC).
-- **[Sendspin](https://github.com/Sendspin/spec)** (the multi-room sync
-  protocol Music Assistant/Home Assistant speaks to player endpoints) is
-  the HA-specific consumer of that ALSA device, so it lives here.
-  [`aiosendspin`](https://github.com/Sendspin-Protocol/sendspin) (the
-  protocol library, not the full `sendspin-cli` app) is the right building
-  block — the CLI app bundles PyAV, numpy, Pillow, PulseAudio and a
-  textual UI that make no sense on this box; a minimal player against
-  `aiosendspin` + direct ALSA output is the plan once there's an actual
-  ALSA device to target. Not started — blocked on the ALSA work above.
+- **x86_64 glibc userspace** on every EA. openHC moved off i386 for Home
+  Assistant: orjson and cryptography publish no i686 wheels, and HA pins exact
+  versions. On x86_64 HA's manylinux wheels install with pip.
+- **Persistent ext4 root on the eMMC** (the `emmc` feature).
+- **MQTT broker** (mosquitto) on the box. `iod` publishes relays and contacts
+  with HA MQTT discovery: set `IOD_MQTT_DISCOVERY=homeassistant` in
+  `/etc/openhc/iod.conf`.
+- **Zigbee network radio for ZHA**: the EM357 is reflashed to EmberZNet 6.7.8
+  (EZSP v8) at boot and served over TCP 6638, with `_zigbee-coordinator._tcp`
+  advertised over mDNS.
+- **Audio**: ALSA, Spotify Connect, AirPlay and HDMI audio on every EA. The
+  EA3's analog out through its ADAU1451 DSP is still open in openHC. Its DSP
+  program is built and sealed inside openHC's CI and never leaves it, so EA3
+  images from this repo build without one.
+
+## What this layer adds
+
+- Python 3.14 with the stdlib modules HA uses (ssl, sqlite3, zlib/bz2/lzma/zstd,
+  expat, decimal, unicodedata) and pip.
 
 ## Status
 
-- [x] Build layering (BR2_EXTERNAL stacked on openHC), `ea1-ha` and `ea3-ha`
-      boards — python3 added as the first delta, full-build verification
-      in progress
-- [ ] EA3 NIC (`e1000` probes `-EIO`, no netboot proven yet) — openHC-side,
-      blocks reaching the board over anything but serial
-- [ ] Persistent root on eMMC for EA1/EA3 (openHC currently ships
-      initramfs-only — needs porting the eMMC ext4 approach openHC already
-      proved on ca1)
-- [ ] ALSA audio path for the ADAU1451 (openHC-side — see above)
-- [ ] Sendspin player against `aiosendspin` (this repo — blocked on ALSA)
-- [ ] Home Assistant Core itself on-target — feasibility open: cross-compiled
-      musl/i686 wheels for HA's dependency tree (aiohttp, cryptography,
-      sqlalchemy, ...) are not a given; may need building from source under
-      Buildroot's python3 package infra, or reconsidering the toolchain
+- [x] Builds on top of current openHC, every EA board, via openHC's downstream hook
+- [ ] Home Assistant Core on the box: a venv on the eMMC, wheels from PyPI.
+      Not yet installed or started by the image.
+- [ ] Sendspin player (Music Assistant multi-room) against
+      [`aiosendspin`](https://github.com/Sendspin-Protocol/sendspin), output
+      through openHC's ALSA setup. Not started.
 
 ## Layout
 
 ```
 board/
-  external.desc, Config.in, external.mk   this repo's BR2_EXTERNAL tree (name: OHCHA)
-  ea1-ha/ea1-ha_defconfig                 HA deltas on top of openHC's ea-common + ea1
-  ea3-ha/ea3-ha_defconfig                 HA deltas on top of openHC's ea-common + ea3
+  ha_defconfig                            the Home Assistant layer
+  external.desc, Config.in, external.mk   this repo's BR2_EXTERNAL tree (OHCHA)
 build/
-  build.sh, Dockerfile                    same Docker/cache-mount model as openHC
+  build.sh      runs openHC/build/build.sh with the HA layer
+  boards.sh     lists openHC's EA boards
+  Dockerfile    Docker Buildroot build, Buildroot ref read from openHC
+.github/workflows/images.yml   one image per EA board
 ```
