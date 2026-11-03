@@ -189,7 +189,9 @@ jobs:
           grab sgx-gpu.yml sgx-i386-sysroot i386
 
       # Runs out of time as a FAILURE (not a cancel) so main still saves the tree
-      # and a re-run resumes from it.
+      # and a re-run resumes from it. A source download that failed (upstream
+      # serving a bot-check page, the mirror a 5xx) is retried in this job, on
+      # the same tree, inside the same 325 minutes.
       - name: Build ${{ matrix.board }}
         env:
           OHC_VERSION: ${{ steps.ver.outputs.version }}
@@ -197,9 +199,21 @@ jobs:
           OHC_SGX_I386_SYSROOT: ${{ steps.sgxsr.outputs.i386 }}
           BR2_CCACHE_DIR: ${{ github.workspace }}/.ccache
         run: |
-          rc=0
-          BUILDROOT_DIR="$HOME/buildroot" BOARD="${{ matrix.board }}" \
-            timeout --signal=INT --kill-after=2m 325m bash ./build/build.sh || rc=$?
+          set -o pipefail
+          end=$(( $(date +%s) + 325 * 60 ))
+          for try in 1 2 3; do
+            rc=0
+            BUILDROOT_DIR="$HOME/buildroot" BOARD="${{ matrix.board }}" \
+              timeout --signal=INT --kill-after=2m "$(( end - $(date +%s) ))s" bash ./build/build.sh 2>&1 \
+              | tee "$RUNNER_TEMP/build.log" || rc=$?
+            if [ "$rc" -eq 0 ] || [ "$rc" -eq 124 ] || [ "$try" -eq 3 ] \
+              || [ $(( end - $(date +%s) )) -lt 900 ] \
+              || ! tail -n 40 "$RUNNER_TEMP/build.log" | grep -q 'stamp_downloaded\] Error'; then
+              break
+            fi
+            echo "::warning::${{ matrix.board }}: a source download failed, retrying in 2 min (try $((try + 1)))"
+            sleep 120
+          done
           [ "$rc" -eq 124 ] && echo "::error title=build-timeout::${{ matrix.board }} ran out of its 325 minutes"
           exit "$rc"
 
