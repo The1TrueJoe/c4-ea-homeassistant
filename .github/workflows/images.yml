@@ -4,7 +4,9 @@
 #
 # Caches: dl/ in the Actions cache; each board's output tree and ccache on this
 # repo's `ci-cache` pre-release (openHC/.github/scripts/release-cache.sh), saved
-# by main only. The first run on a new Buildroot ref is a cold build.
+# by main only. A PR's failed attempt saves its ccache to the Actions cache, and
+# a board with no ccache of its own starts from openHC main's. ci-retry.yml
+# re-runs a build that ran out of time.
 
 name: images
 
@@ -149,10 +151,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash openHC/.github/scripts/release-cache.sh restore out-${{ matrix.board }}-${{ env.BUILDROOT_REF }} output/build/${{ matrix.board }}
 
-      - name: Restore ccache
+      # A PR keeps nothing but this ccache when it runs out of time, so its
+      # failed attempt's ccache comes first (the Actions cache), then main's,
+      # then openHC main's: same toolchain and packages, so most of it hits.
+      - name: Restore ccache (a failed attempt's)
+        id: ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-${{ matrix.board }}-${{ env.BUILDROOT_REF }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ccache-${{ matrix.board }}-${{ env.BUILDROOT_REF }}-${{ github.run_id }}-
+            ccache-${{ matrix.board }}-${{ env.BUILDROOT_REF }}-
+      - name: Restore ccache (main's, else openHC main's)
+        if: steps.ccache.outputs.cache-matched-key == ''
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash openHC/.github/scripts/release-cache.sh restore ccache-${{ matrix.board }}-${{ env.BUILDROOT_REF }} .ccache
+        run: |
+          n=ccache-${{ matrix.board }}-${{ env.BUILDROOT_REF }}
+          bash openHC/.github/scripts/release-cache.sh restore "$n" .ccache
+          [ -d .ccache ] || GITHUB_REPOSITORY=The1TrueJoe/openHC \
+            bash openHC/.github/scripts/release-cache.sh restore "$n" .ccache
 
       - name: Fetch Buildroot
         run: |
@@ -274,6 +293,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash openHC/.github/scripts/release-cache.sh save ccache-${{ matrix.board }}-${{ env.BUILDROOT_REF }} .ccache
+      # A re-run resumes from what the failed attempt compiled.
+      - name: Save ccache (a PR's failed attempt)
+        if: failure() && !(github.event_name == 'push' && github.ref == 'refs/heads/main')
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-${{ matrix.board }}-${{ env.BUILDROOT_REF }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Attach to release
         if: success() && github.event_name == 'release'
