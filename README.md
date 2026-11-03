@@ -20,7 +20,7 @@ appended, and nothing else.
   from the submodule, so new openHC boards build here without changes here:
 
   ```sh
-  make boards      # ea1-v1 ea1-v2 ea1-v2-poe ea3-v1 ea3-v2 today
+  make boards      # ea1-v1 ea1-v2 ea1-v2-poe ea3-v1 ea3-v2 ea5 today
   ```
 
 Bump openHC:

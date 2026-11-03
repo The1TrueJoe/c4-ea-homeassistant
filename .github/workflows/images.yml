@@ -7,6 +7,9 @@
 # by main only. A PR's failed attempt saves its ccache to the Actions cache, and
 # a board with no ccache of its own starts from openHC main's. ci-retry.yml
 # re-runs a build that ran out of time.
+#
+# Like openHC, the EA images use one prebuilt toolchain (OHC_EA_SDK), at
+# openHC's own absolute path: its compiler paths, and so openHC's ccache, match.
 
 name: images
 
@@ -28,6 +31,9 @@ concurrency:
 
 permissions:
   contents: read
+
+env:
+  EA_SDK_DIR: /home/runner/work/openHC/openHC/output/ea-toolchain
 
 jobs:
   boards:
@@ -54,12 +60,15 @@ jobs:
 
       # A minute: compose each board with the HA layer, then let kconfig resolve
       # it. An unmet `depends on` drops a symbol silently, so check it survived.
+      # Composed with an SDK set, as the images build (no toolchain needed yet).
       - name: Resolve every board's config
         run: |
           set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/sdk/bin"
           for b in $(build/boards.sh); do
             out="$RUNNER_TEMP/cfg/$b"
-            OHC_DEFCONFIG_ONLY=1 BOARD="$b" BR2_OUTPUT_DIR="$out" build/build.sh >/dev/null
+            OHC_EA_SDK="$RUNNER_TEMP/sdk" OHC_DEFCONFIG_ONLY=1 BOARD="$b" BR2_OUTPUT_DIR="$out" \
+              build/build.sh >/dev/null
             make -s -C "$HOME/buildroot" O="$out" \
               BR2_EXTERNAL="$PWD/openHC/board $PWD/board" \
               defconfig BR2_DEFCONFIG="$out/openhc-$b.defconfig" >/dev/null
@@ -80,8 +89,83 @@ jobs:
             echo "boards=$(build/boards.sh | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
           fi
 
+  # The EA SDK: this repo's cached one, else openHC main's own (when openHC
+  # built it from the same inputs; ccache only hits with those exact
+  # binaries), else built here as openHC's toolchain job does.
+  toolchain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Buildroot ref (from openHC)
+        run: echo "BUILDROOT_REF=$(sed -n 's/^ARG BUILDROOT_REF=//p' openHC/build/Dockerfile)" >> "$GITHUB_ENV"
+
+      - name: Restore cached EA SDK
+        id: sdkcache
+        uses: actions/cache/restore@v4
+        with:
+          path: ea-sdk.tar
+          key: ea-sdk-${{ env.BUILDROOT_REF }}-${{ hashFiles('openHC/board/ea/common/common_defconfig', 'openHC/board/common/common_defconfig', 'openHC/build/buildroot-patches/**', 'openHC/build/build.sh') }}
+
+      - name: Take openHC main's EA SDK
+        id: upstream
+        if: steps.sdkcache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          inputs="board/ea/common/common_defconfig board/common/common_defconfig build/buildroot-patches build/build.sh build/Dockerfile"
+          gh run list -R The1TrueJoe/openHC --workflow ci.yml --branch main --status success --limit 10 \
+              --json databaseId,headSha -q '.[] | [.databaseId, .headSha] | @tsv' |
+            while read -r run sha; do
+              git -C openHC fetch -q --depth 1 origin "$sha" || continue
+              # shellcheck disable=SC2086
+              git -C openHC diff --quiet "$sha" HEAD -- $inputs || continue
+              gh run download "$run" -R The1TrueJoe/openHC -n ea-sdk -D "$RUNNER_TEMP/up" 2>/dev/null || continue
+              mv "$RUNNER_TEMP/up/ea-sdk.tar" ea-sdk.tar
+              echo ">> EA SDK from openHC run $run ($sha)"; break
+            done
+          if [ -f ea-sdk.tar ]; then echo "got=true" >> "$GITHUB_OUTPUT"; else echo ">> no matching openHC SDK"; fi
+
+      - name: Build the EA toolchain
+        if: steps.sdkcache.outputs.cache-hit != 'true' && steps.upstream.outputs.got != 'true'
+        run: |
+          set -e
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex git rsync unzip wget cpio file figlet \
+            python3 libncurses-dev libssl-dev ca-certificates perl patch xz-utils
+          git init -q "$HOME/buildroot"
+          git -C "$HOME/buildroot" fetch -q --depth 1 https://github.com/buildroot/buildroot "$BUILDROOT_REF"
+          git -C "$HOME/buildroot" checkout -q FETCH_HEAD
+          for p in openHC/build/buildroot-patches/*.patch; do
+            [ -e "$p" ] || continue
+            patch -d "$HOME/buildroot" -p1 --forward --batch < "$p"
+          done
+          BUILDROOT_DIR="$HOME/buildroot" BOARD=ea3-v2 OHC_TOOLCHAIN_ONLY=1 \
+            BR2_OUTPUT_DIR="$EA_SDK_DIR" BR2_DL_DIR="$GITHUB_WORKSPACE/dl" \
+            bash openHC/build/build.sh toolchain
+          tar -C "$EA_SDK_DIR" -cf ea-sdk.tar host
+
+      - name: Save cached EA SDK
+        if: steps.sdkcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ea-sdk.tar
+          key: ea-sdk-${{ env.BUILDROOT_REF }}-${{ hashFiles('openHC/board/ea/common/common_defconfig', 'openHC/board/common/common_defconfig', 'openHC/build/buildroot-patches/**', 'openHC/build/build.sh') }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ea-sdk
+          path: ea-sdk.tar
+          retention-days: 3
+          if-no-files-found: error
+
   images:
-    needs: boards
+    needs: [boards, toolchain]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -112,6 +196,19 @@ jobs:
           ref=$(sed -n 's/^ARG BUILDROOT_REF=//p' openHC/build/Dockerfile)
           [ -n "$ref" ] || { echo "::error::no BUILDROOT_REF in openHC/build/Dockerfile"; exit 1; }
           echo "BUILDROOT_REF=$ref" >> "$GITHUB_ENV"
+
+      # Back at the path it was built at: its sysroot path is baked in.
+      - uses: actions/download-artifact@v4
+        with:
+          name: ea-sdk
+          path: ${{ runner.temp }}/ea-sdk
+      - name: Unpack the EA toolchain
+        run: |
+          set -e
+          mkdir -p "$EA_SDK_DIR"
+          tar -C "$EA_SDK_DIR" -xf "$RUNNER_TEMP/ea-sdk/ea-sdk.tar"
+          rm "$RUNNER_TEMP/ea-sdk/ea-sdk.tar"
+          test -x "$EA_SDK_DIR/host/bin/x86_64-buildroot-linux-gnu-gcc"
 
       - uses: actions/setup-node@v4
         with:
@@ -153,25 +250,27 @@ jobs:
 
       # A PR keeps nothing but this ccache when it runs out of time, so its
       # failed attempt's ccache comes first (the Actions cache), then main's,
-      # then openHC main's: same toolchain and packages, so most of it hits.
+      # then openHC main's (same SDK and packages, so most of it hits; a board
+      # openHC has none for takes its ea3-v2's).
       - name: Restore ccache (a failed attempt's)
         id: ccache
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-${{ matrix.board }}-${{ env.BUILDROOT_REF }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: ccache-sdk-${{ matrix.board }}-${{ env.BUILDROOT_REF }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            ccache-${{ matrix.board }}-${{ env.BUILDROOT_REF }}-${{ github.run_id }}-
-            ccache-${{ matrix.board }}-${{ env.BUILDROOT_REF }}-
+            ccache-sdk-${{ matrix.board }}-${{ env.BUILDROOT_REF }}-${{ github.run_id }}-
+            ccache-sdk-${{ matrix.board }}-${{ env.BUILDROOT_REF }}-
       - name: Restore ccache (main's, else openHC main's)
         if: steps.ccache.outputs.cache-matched-key == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          n=ccache-${{ matrix.board }}-${{ env.BUILDROOT_REF }}
-          bash openHC/.github/scripts/release-cache.sh restore "$n" .ccache
-          [ -d .ccache ] || GITHUB_REPOSITORY=The1TrueJoe/openHC \
-            bash openHC/.github/scripts/release-cache.sh restore "$n" .ccache
+          rc=openHC/.github/scripts/release-cache.sh
+          bash "$rc" restore "ccache-${{ matrix.board }}-$BUILDROOT_REF" .ccache
+          for b in ${{ matrix.board }} ea3-v2; do
+            [ -d .ccache ] || GITHUB_REPOSITORY=The1TrueJoe/openHC bash "$rc" restore "ccache-$b-$BUILDROOT_REF" .ccache
+          done
 
       - name: Fetch Buildroot
         run: |
@@ -227,6 +326,7 @@ jobs:
           OHC_VERSION: ${{ steps.ver.outputs.version }}
           OHC_SGX_WPE_SYSROOT: ${{ steps.sgxsr.outputs.wpe }}
           OHC_SGX_I386_SYSROOT: ${{ steps.sgxsr.outputs.i386 }}
+          OHC_EA_SDK: ${{ env.EA_SDK_DIR }}/host
           BR2_CCACHE_DIR: ${{ github.workspace }}/.ccache
         run: |
           set -o pipefail
@@ -299,7 +399,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-${{ matrix.board }}-${{ env.BUILDROOT_REF }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: ccache-sdk-${{ matrix.board }}-${{ env.BUILDROOT_REF }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Attach to release
         if: success() && github.event_name == 'release'
