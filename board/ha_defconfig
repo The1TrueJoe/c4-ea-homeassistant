@@ -1,0 +1,13 @@
+# c4-ea-homeassistant — the Home Assistant layer.
+#
+# openHC's build.sh appends this LAST (OHC_EXTRA_DEFCONFIG) to whichever EA
+# board is being built, so it wins every assignment. Board differences stay in
+# openHC; only what HA needs on top of an openHC EA image goes here.
+
+# HA Core: Python + installer + init script; HA itself installs on first boot
+# (package/ha-core).
+BR2_PACKAGE_HA_CORE=y
+
+# Room for Python in the image (openHC's emmc feature leaves this to the layer
+# that needs it). S03growfs still grows / to the whole partition on first boot.
+BR2_TARGET_ROOTFS_EXT2_SIZE="768M"

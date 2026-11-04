@@ -1,36 +1,37 @@
-# c4-ea-homeassistant — Home Assistant on top of openHC's EA1/EA3 bare kernel
-# build.
+# c4-ea-homeassistant — openHC EA images with Home Assistant on top.
 #
-# openHC (vendored as the `openHC/` submodule) stays generic: kernel, netboot,
-# base rootfs, nothing HA-specific. This Makefile builds one extra defconfig
-# layer on top of it (board/<BOARD>) that adds what HA needs — see
-# build/build.sh for how the layers combine.
+# Boards come from openHC (openHC/board/ea/<board>); this repo adds one layer,
+# board/ha_defconfig, to whichever is built. See build/build.sh.
 
-BOARD ?= ea3-ha
-# ea3-ha: what's actually on the bench right now.
-# ea1-ha: openHC's proven-on-hardware board; same split, different base.
-BOARDS := ea1-ha ea3-ha
+BOARD ?= ea3-v2
+BOARDS := $(shell build/boards.sh 2>/dev/null)
 
-ifeq ($(filter $(BOARD),$(BOARDS)),)
-  $(error BOARD must be one of: $(BOARDS)  (got '$(BOARD)'))
-endif
-
-.PHONY: help image
+.PHONY: help boards daemons image defconfig
 
 help:
-	@echo "c4-ea-homeassistant — EA1/EA3 + Home Assistant build"
+	@echo "c4-ea-homeassistant — openHC EA image + Home Assistant layer"
 	@echo ""
-	@echo "  make image [BOARD=...]   build the image (Docker Buildroot, layers on openHC)"
+	@echo "  make daemons   [BOARD=...]   stage openHC's daemons into its overlay (rustup + node)"
+	@echo "  make image     [BOARD=...]   build the image (Docker Buildroot)"
+	@echo "  make defconfig [BOARD=...]   print the composed defconfig, build nothing"
 	@echo ""
-	@echo "  current BOARD=$(BOARD)   (supported: $(BOARDS))"
+	@echo "  current BOARD=$(BOARD)   (openHC EA boards: $(BOARDS))"
 	@echo ""
-	@echo "  Needs the openHC submodule checked out:"
-	@echo "    git submodule update --init openHC"
+	@echo "  Needs the openHC submodule: git submodule update --init --recursive"
+
+boards:
+	@build/boards.sh
+
+daemons:
+	bash openHC/packages/build.sh $(BOARD)
 
 image:
-	@test -f openHC/board/ea-common/ea-common_defconfig || { \
+	@test -f openHC/build/build.sh || { \
 		echo "openHC submodule not checked out — run:"; \
-		echo "  git submodule update --init openHC"; exit 1; }
+		echo "  git submodule update --init --recursive"; exit 1; }
 	DOCKER_BUILDKIT=1 docker build -f build/Dockerfile --target artifacts \
 		--build-arg BOARD=$(BOARD) $(if $(JOBS),--build-arg BR2_JLEVEL=$(JOBS)) \
 		--output type=local,dest=output/images .
+
+defconfig:
+	@OHC_DEFCONFIG_ONLY=1 BOARD=$(BOARD) build/build.sh

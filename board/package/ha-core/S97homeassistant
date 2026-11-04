@@ -1,0 +1,50 @@
+#!/bin/sh
+# Home Assistant Core on :8123, config in /data/ha/config.
+#
+# The first boot (and the first after a version bump) installs it from PyPI
+# before starting, which takes a while; both run in the background, logged to
+# syslog as homeassistant. A crash restarts it; an exit 0 (stopped from the UI)
+# does not. HA restarts itself in place (execv), so that needs nothing here.
+. /etc/ha-core.conf
+PIDFILE=/var/run/homeassistant.pid
+V="$HA_DIR/venv"
+
+# Stays in this process (the pidfile's), so stop can kill it: only the
+# children's output is piped.
+run() {
+    export PATH="$V/bin:$PATH" VIRTUAL_ENV="$V" TMPDIR="$HA_DIR/tmp"
+    mkdir -p "$TMPDIR"
+    until /opt/ha/bin/ha-install >>"$HA_DIR/install.log" 2>&1; do
+        logger -t homeassistant "install failed (see $HA_DIR/install.log), retrying in 60 s"
+        sleep 60
+    done
+    while :; do
+        rm -f "$TMPDIR/hass.rc"
+        { hass --config "$HA_DIR/config"; echo $? >"$TMPDIR/hass.rc"; } 2>&1 \
+            | logger -t homeassistant
+        rc=$(cat "$TMPDIR/hass.rc" 2>/dev/null || echo 1)
+        [ "$rc" = 0 ] && break
+        logger -t homeassistant "hass exited $rc, restarting in 10 s"
+        sleep 10
+    done
+}
+
+case "$1" in
+    start)
+        start-stop-daemon -S -q -b -m -p "$PIDFILE" --exec "$0" -- run \
+            && echo "homeassistant: starting on :8123 (first boot installs it first)"
+        ;;
+    stop)
+        # The loop first, so it cannot restart hass.
+        [ -f "$PIDFILE" ] && start-stop-daemon -K -q -p "$PIDFILE"
+        rm -f "$PIDFILE"
+        killall hass 2>/dev/null
+        for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+            pidof hass >/dev/null || break
+            sleep 1
+        done
+        ;;
+    restart) "$0" stop; "$0" start ;;
+    run) run ;;
+    *) echo "usage: $0 {start|stop|restart}"; exit 1 ;;
+esac

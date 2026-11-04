@@ -1,0 +1,24 @@
+#!/bin/sh
+# Install or upgrade Home Assistant Core into $HA_DIR/venv. Does nothing when
+# the venv already holds $HA_VERSION.
+#
+# The venv has no pip of its own: the system pip installs uv into it, and uv
+# (a dependency of homeassistant anyway, which HA also uses for integration
+# requirements) installs the rest. Everything is a manylinux wheel except
+# PyRIC, a pure-Python sdist.
+set -eu
+. /etc/ha-core.conf
+V="$HA_DIR/venv"
+
+[ "$(cat "$V/.ha-version" 2>/dev/null)" = "$HA_VERSION" ] && exit 0
+
+echo "ha-install: homeassistant $HA_VERSION into $V"
+mkdir -p "$HA_DIR/config" "$HA_DIR/tmp"
+# Off /tmp: the download is ~130 MB and /tmp is RAM.
+export TMPDIR="$HA_DIR/tmp"
+[ -x "$V/bin/python3" ] || python3 -m venv --without-pip "$V"
+python3 -m pip --python "$V/bin/python3" install -q --disable-pip-version-check \
+    --no-cache-dir uv
+"$V/bin/uv" pip install --python "$V/bin/python3" "homeassistant==$HA_VERSION"
+echo "$HA_VERSION" > "$V/.ha-version"
+echo "ha-install: done"

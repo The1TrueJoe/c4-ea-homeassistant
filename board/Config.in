@@ -1,1 +1,3 @@
 comment "c4-ea-homeassistant board options"
+
+source "$BR2_EXTERNAL_OHCHA_PATH/package/ha-core/Config.in"
