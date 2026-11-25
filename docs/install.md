@@ -112,8 +112,15 @@ printf '\n[network]\nreplace_other = true\n' >> /run/ohc/zigbee-bridge.toml
 sleep 15; sed -i '/^\[network\]/,$d' /run/ohc/zigbee-bridge.toml
 ```
 
-**Bluetooth LE:** not yet (openHC's kernel support for the EA-3's onboard
-Bluetooth is open).
+**Bluetooth LE.** openHC drives the EA-3's onboard Bluetooth (an Atheros
+AR3012) with [bluetooth-bridge](https://github.com/pulzar-net/bluetooth-bridge),
+which this image sets to announce over the same MQTT. A device for the bridge
+appears with a connection sensor. Broadcast sensors (BTHome v2 such as Shelly
+BLU, Ruuvi) need no pairing: one in range shows up as a device of its own within
+seconds. Everything the radio hears is also on MQTT under
+`openhc/<box>/bluetooth/scan/<address>`. The setting lives in
+`/data/ohc/bluetooth.env` (`OHC_BLUETOOTH_DISCOVERY=false` turns the announcing
+off, then `/etc/init.d/S92ohcbluetooth restart`).
 
 ### Music Assistant
 

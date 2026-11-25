@@ -87,5 +87,8 @@ git add openHC && git commit -m "openHC: bump to <sha>"
 - [x] openHC's AirPlay 2 endpoints (shairport-sync and nqptp built in the
       image), one per output, advertised as AirPlay 2.
 - [x] The Debian image boots in QEMU on openHC's full kernel.
-- [ ] Bluetooth LE: openHC's kernel support for the EA-3's onboard Bluetooth,
-      and its Bluetooth bridge's discovery.
+- [x] Bluetooth LE: the EA-3's onboard AR3012 up as hci0 with openHC's next
+      kernel (ath3k and its firmware; tested by loading them on the EA-3),
+      bluetooth-bridge scanning (about 20 nearby devices on MQTT) and its MQTT
+      discovery in Home Assistant. A decoded sensor: none in range yet. The
+      image picks the kernel half up when the openHC submodule moves past it.
