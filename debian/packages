@@ -14,8 +14,15 @@ alsa-utils ksmbd-tools hostapd dnsmasq iw wireless-regdb
 v4l-utils
 
 # audio for Music Assistant
-# (Debian's shairport-sync is classic AirPlay; trixie has no nqptp for AirPlay 2)
-ffmpeg squeezelite shairport-sync
+ffmpeg squeezelite
+
+# openHC's AirPlay 2 endpoints: shairport-sync 5.6.3 + nqptp 1.2.9, built from
+# source by build.sh as openHC's Buildroot builds them (Debian's shairport-sync
+# is classic AirPlay only, and trixie has no nqptp). Their build dependencies:
+autoconf automake libtool xxd libpopt-dev libconfig-dev libdaemon-dev
+libavahi-client-dev libsoxr-dev libplist-dev libsodium-dev libgcrypt20-dev
+uuid-dev libavcodec-dev libavformat-dev libavutil-dev libswresample-dev
+libglib2.0-dev
 
 # Home Assistant and Music Assistant: their venvs live on /data and install on
 # first boot; a few requirements have no wheel for HA's Python and build here.

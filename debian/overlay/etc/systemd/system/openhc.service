@@ -3,8 +3,7 @@
 # init scripts through /usr/lib/openhc/rc.
 [Unit]
 Description=openHC services
-Wants=network-online.target systemd-udev-settle.service
-After=network.target systemd-udevd.service dbus.service systemd-timesyncd.service
+After=systemd-udev-trigger.service systemd-udevd.service dbus.service
 
 [Service]
 Type=oneshot

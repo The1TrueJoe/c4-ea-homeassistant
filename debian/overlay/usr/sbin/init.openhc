@@ -6,4 +6,7 @@
 # returns at once, and systemd starts.
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 [ -x /etc/init.d/S00kexec ] && /etc/init.d/S00kexec start
+# First boot after an install: a network guard that outlives anything below
+# (see /usr/lib/openhc/firstboot-guard).
+[ -f /etc/openhc/firstboot-guard ] && /usr/lib/openhc/firstboot-guard </dev/null >/dev/kmsg 2>&1 &
 exec /lib/systemd/systemd "$@"

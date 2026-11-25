@@ -1,0 +1,27 @@
+#!/bin/sh
+# First boot after an install only (the image ships /etc/openhc/firstboot-guard):
+# if the box has no IPv4 address within $WAIT seconds, nobody can reach it to
+# find out why. So hand it back to openHC's network installer: flag p1 for
+# reinstall and reboot. boot-init then comes up on DHCP with SSH (as during an
+# install) and waits for the flasher, instead of a box that looks dead. On
+# success the marker goes, and later boots never do this (an unplugged cable
+# on an installed box must not drop it into the installer).
+MARK=/etc/openhc/firstboot-guard
+WAIT=${WAIT:-300}
+[ -f "$MARK" ] || exit 0
+i=0
+while [ $i -lt "$WAIT" ]; do
+    if ip -4 -o addr show scope global 2>/dev/null | grep -q inet; then
+        rm -f "$MARK"
+        echo "firstboot-guard: network up, guard removed"
+        exit 0
+    fi
+    sleep 5; i=$((i + 5))
+done
+echo "firstboot-guard: no IPv4 address after ${WAIT}s: rebooting into openHC's network installer"
+rm -f "$MARK"
+touch /.ohc-reinstall-pending
+sync
+# Straight to the kernel: whatever kept the network down may be PID 1 itself.
+echo 1 > /proc/sys/kernel/sysrq
+echo b > /proc/sysrq-trigger

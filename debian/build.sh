@@ -35,7 +35,7 @@ done
 
 echo ">> what the image takes from openHC's rootfs"
 O=$W/openhc
-for d in opt/ohc lib/modules lib/firmware boot etc usr/share/udhcpc; do
+for d in opt/ohc lib/modules lib/firmware boot etc usr/share/udhcpc usr/bin/librespot; do
     mkdir -p "$O/$(dirname "$d")"
     debugfs -R "rdump /$d $O/$(dirname "$d")" "$IN/rootfs.ext2" 2>/dev/null || true
 done
@@ -81,6 +81,26 @@ UV_PYTHON_INSTALL_DIR="$R/opt/python-dist" "$R/usr/local/bin/uv" python install 
 py=$(cd "$R/opt/python-dist" && ls -d cpython-*-linux-x86_64-gnu | grep -E '^cpython-[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -1)
 ln -sfn "python-dist/$py" "$R/opt/python"
 
+echo ">> AirPlay 2 sources"
+SPS_VERSION=${SPS_VERSION:-5.6.3} NQPTP_VERSION=${NQPTP_VERSION:-1.2.9}
+mkdir -p "$R/tmp/src"
+curl -fsSL "https://github.com/mikebrady/shairport-sync/archive/refs/tags/$SPS_VERSION.tar.gz" | tar xz -C "$R/tmp/src"
+curl -fsSL "https://github.com/mikebrady/nqptp/archive/refs/tags/$NQPTP_VERSION.tar.gz" | tar xz -C "$R/tmp/src"
+
+# openHC's librespot (Spotify Connect endpoints) is a dynamic glibc binary from
+# Buildroot: keep it only if Debian's glibc has every symbol version it needs.
+if [ -f "$O/usr/bin/librespot" ]; then
+    cp "$O/usr/bin/librespot" "$R/tmp/librespot"
+    need=$(chroot "$R" objdump -T /tmp/librespot | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1)
+    have=$(chroot "$R" ldd --version | head -1 | grep -o '[0-9.]*$')
+    if [ "$(printf '%s\n%s\n' "${need#GLIBC_}" "$have" | sort -V | tail -1)" = "$have" ]; then
+        mv "$R/tmp/librespot" "$R/usr/bin/librespot"; echo "   librespot kept ($need <= glibc $have)"
+    else
+        rm "$R/tmp/librespot"
+        echo "   librespot left out (needs $need, Debian has glibc $have): Spotify Connect endpoints won't start"
+    fi
+fi
+
 echo ">> configure in the root"
 mount -t proc proc "$R/proc"; mount -t sysfs sys "$R/sys"; mount --bind /dev "$R/dev"
 cp "$REPO/openHC/packages/alsa-ohceq/ohceq.c" "$R/tmp/"
@@ -89,6 +109,17 @@ chroot "$R" /bin/sh -eux <<'CHROOT'
 mkdir -p /usr/lib/x86_64-linux-gnu/alsa-lib
 gcc -O2 -shared -fPIC -DPIC -Wall -o /usr/lib/x86_64-linux-gnu/alsa-lib/libasound_module_pcm_ohceq.so /tmp/ohceq.c -lasound -lm
 rm /tmp/ohceq.c
+# AirPlay 2 for openHC's AirPlay endpoints, configured as openHC's Buildroot does
+cd /tmp/src/nqptp-*
+autoreconf -fi >/dev/null && ./configure -q --prefix=/usr && make -s -j"$(nproc)" && make -s install
+cd /tmp/src/shairport-sync-*
+autoreconf -fi >/dev/null
+./configure -q --prefix=/usr --sysconfdir=/etc --with-alsa --with-metadata --with-pipe --with-stdout \
+    --with-avahi --with-libdaemon --with-ssl=openssl --with-airplay-2 --with-ffmpeg \
+    --with-dbus-interface --with-mpris-interface --with-soxr
+make -s -j"$(nproc)" && make -s install
+cd / && rm -rf /tmp/src
+shairport-sync -V
 # busybox applets openHC's scripts use that Debian lacks (udhcpc, logread, devmem...)
 mkdir -p /usr/lib/openhc/busybox
 busybox --install -s /usr/lib/openhc/busybox
@@ -97,7 +128,7 @@ dpkg-divert --local --rename --divert /usr/sbin/init.systemd --add /usr/sbin/ini
 ln -sf init.openhc /usr/sbin/init
 # openHC's scripts start these themselves
 systemctl mask mosquitto.service avahi-daemon.service avahi-daemon.socket dnsmasq.service \
-    hostapd.service shairport-sync.service squeezelite.service
+    hostapd.service squeezelite.service ksmbd.service
 systemctl enable openhc.service ssh.service systemd-timesyncd.service
 echo root:openhc | chpasswd
 echo openhc > /etc/hostname

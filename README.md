@@ -19,8 +19,12 @@ replaced by Debian trixie:
   all static binaries), and `/etc` where Debian has nothing of the same name:
   openHC's init scripts, `asound.conf`, udev rules, MQTT and mDNS config.
 - **From Debian:** the base system, plus the programs openHC's scripts start
-  (mosquitto, avahi, shairport-sync, ...) and what Home Assistant needs,
-  including a compiler for the few requirements PyPI has no wheel of.
+  (mosquitto, avahi, hostapd, ...) and what Home Assistant needs, including a
+  compiler for the few requirements PyPI has no wheel of.
+- **Built in the image, as openHC builds them:** shairport-sync 5.6.3 with
+  AirPlay 2 and nqptp 1.2.9 (Debian's shairport-sync is classic AirPlay only),
+  so openHC's AirPlay endpoints are AirPlay 2 here too; and openHC's ALSA tone
+  plugin against Debian's alsa-lib.
 - **This repo:** [`debian/`](debian): the package list, the build, and an
   overlay with Home Assistant (`S97homeassistant`), Music Assistant and its
   squeezelite players (`S98music-assistant`), and the MQTT discovery for the
@@ -29,7 +33,10 @@ replaced by Debian trixie:
 openHC's boot scripts run as they do on Buildroot, in order, from one systemd
 unit (`openhc.service` → `/usr/lib/openhc/rc`), minus the ones for the base
 system that Debian provides. `S00kexec`, the handoff from the bootstrap kernel
-to the full one, runs before systemd (`/usr/sbin/init.openhc`).
+to the full one, runs before systemd (`/usr/sbin/init.openhc`), and so does a
+first-boot guard: no network address within five minutes of the first boot
+puts the box back in openHC's SSH installer instead of leaving it dark. The
+journal is persistent, so that boot can be read from p1 afterwards.
 
 **Keeping up with openHC** is a submodule bump: kernel, driver, firmware,
 daemon and config changes all come from openHC's bundle for the pinned
@@ -76,8 +83,12 @@ git add openHC && git commit -m "openHC: bump to <sha>"
 - [x] Music Assistant with a squeezelite player per output; played to the
       EA-3's analog output from Home Assistant. AirPlay into MA through its
       AirPlay Receiver plugin.
-- [ ] The Debian image itself on hardware. Everything above ran on a
-      Buildroot openHC box with Python and the services added by hand; the
-      same scripts are in this image.
+- [x] The Debian image boots in QEMU on openHC's full kernel: systemd,
+      openhc.service and openHC's scripts, the root grown, eth0 up.
+- [ ] The Debian image on an EA. The first install on an EA-3 did not come
+      back on the network (before the first-boot guard existed); not yet
+      diagnosed. Everything else above ran on a Buildroot openHC box with
+      Python and the services added by hand; the same scripts are in this
+      image.
 - [ ] Bluetooth LE: openHC's kernel support for the EA-3's onboard Bluetooth,
       and its Bluetooth bridge's discovery.
