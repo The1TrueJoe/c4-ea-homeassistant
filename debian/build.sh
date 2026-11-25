@@ -92,7 +92,7 @@ curl -fsSL "https://github.com/mikebrady/nqptp/archive/refs/tags/$NQPTP_VERSION.
 if [ -f "$O/usr/bin/librespot" ]; then
     cp "$O/usr/bin/librespot" "$R/tmp/librespot"
     need=$(chroot "$R" objdump -T /tmp/librespot | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1)
-    have=$(chroot "$R" ldd --version | head -1 | grep -o '[0-9.]*$')
+    have=$(chroot "$R" getconf GNU_LIBC_VERSION | cut -d" " -f2)
     if [ "$(printf '%s\n%s\n' "${need#GLIBC_}" "$have" | sort -V | tail -1)" = "$have" ]; then
         mv "$R/tmp/librespot" "$R/usr/bin/librespot"; echo "   librespot kept ($need <= glibc $have)"
     else
