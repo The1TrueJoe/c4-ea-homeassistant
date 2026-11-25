@@ -12,6 +12,8 @@ e2fsprogs kexec-tools usbutils i2c-tools less nano
 mosquitto mosquitto-clients avahi-daemon avahi-utils libnss-mdns
 alsa-utils ksmbd-tools hostapd dnsmasq iw wireless-regdb
 v4l-utils
+# udhcpc's default.script calls /sbin/ifconfig and route; Wi-Fi client; motd
+net-tools wpasupplicant figlet
 
 # audio for Music Assistant
 ffmpeg squeezelite

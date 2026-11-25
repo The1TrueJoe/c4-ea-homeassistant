@@ -35,7 +35,7 @@ done
 
 echo ">> what the image takes from openHC's rootfs"
 O=$W/openhc
-for d in opt/ohc lib/modules lib/firmware boot etc usr/share/udhcpc usr/bin/librespot; do
+for d in opt/ohc lib/modules lib/firmware boot etc usr/share/udhcpc usr/bin usr/sbin bin sbin; do
     mkdir -p "$O/$(dirname "$d")"
     debugfs -R "rdump /$d $O/$(dirname "$d")" "$IN/rootfs.ext2" 2>/dev/null || true
 done
@@ -55,6 +55,21 @@ cp -a "$O/opt/." "$R/opt/"
 cp -a "$O/lib/modules" "$O/lib/firmware" "$R/usr/lib/"
 cp -a "$O/boot/." "$R/boot/"
 [ -d "$O/usr/share/udhcpc" ] && cp -a "$O/usr/share/udhcpc" "$R/usr/share/"
+# Debian's busybox udhcpc runs /etc/udhcpc/default.script (Buildroot's:
+# /usr/share/udhcpc/): without it a lease "succeeds" and sets no address.
+mkdir -p "$R/etc/udhcpc"
+ln -sf /usr/share/udhcpc/default.script "$R/etc/udhcpc/default.script"
+# openHC's own shell tools (ohc-udev-name for the udev rules, ...): every script
+# in its bin dirs that Debian has no file of. Its ELF binaries are Buildroot
+# glibc builds and can't run here; their Debian packages are in `packages`.
+for d in usr/bin usr/sbin bin sbin; do
+    [ -d "$O/$d" ] || continue
+    for f in "$O/$d"/*; do
+        [ -f "$f" ] && [ ! -L "$f" ] && [ "$(head -c2 "$f")" = '#!' ] || continue
+        t="$R/$d/${f##*/}"
+        [ -e "$t" ] || [ -L "$t" ] || { cp -a "$f" "$t"; echo "   openHC script: /$d/${f##*/}"; }
+    done
+done
 # No-clobber: Debian's files win where both exist (passwd, os-release, ...);
 # everything only openHC has (init.d/S*, asound.conf, openhc/, udev rules,
 # openhc-release, mosquitto and avahi config) comes across.
@@ -128,7 +143,7 @@ dpkg-divert --local --rename --divert /usr/sbin/init.systemd --add /usr/sbin/ini
 ln -sf init.openhc /usr/sbin/init
 # openHC's scripts start these themselves
 systemctl mask mosquitto.service avahi-daemon.service avahi-daemon.socket dnsmasq.service \
-    hostapd.service squeezelite.service ksmbd.service
+    hostapd.service squeezelite.service ksmbd.service wpa_supplicant.service
 systemctl enable openhc.service ssh.service systemd-timesyncd.service
 echo root:openhc | chpasswd
 echo openhc > /etc/hostname
@@ -141,7 +156,10 @@ umount -R "$R/proc" "$R/sys" "$R/dev"
 
 echo ">> rootfs.ext2"
 mb=$(( $(du -sm "$R" | cut -f1) * 5 / 4 + 256 ))
-rm "$IN/rootfs.ext2"
+# openHC's other p1 roots are Buildroot's: drop them so nothing installs one
+# instead of this (rootfs.ext2.gz is the flasher's self-install, staged in a
+# 16 MiB gap this root can't fit). rootfs.cpio.gz stays: the RAM netboot.
+rm -f "$IN"/rootfs.ext2 "$IN"/rootfs.ext2.gz "$IN"/rootfs.ext4 "$IN"/rootfs.cpio "$IN"/rootfs.tar
 mke2fs -q -t ext4 -L openhc -d "$R" "$IN/rootfs.ext2" "${mb}M"
 echo "   ${mb} MB (the box grows it to the whole partition on first boot)"
 
