@@ -1,11 +1,113 @@
 # c4-ea-homeassistant — EA3 + Home Assistant deltas.
 #
-# Concatenated AFTER openHC's ea-common_defconfig + ea3_defconfig by
-# build/build.sh. See board/ea1-ha/ea1-ha_defconfig for the rationale — same
-# split, EA3 side. This is the board actually being tested on hardware right
-# now (see openHC docs/ea3-recon.md for what's proven vs. still open on EA3
-# itself: NIC probe currently -EIO, no confirmed netboot yet).
+# Concatenated AFTER openHC's ea-common_defconfig + ea3-v2_defconfig by
+# build/build.sh. Only what Home Assistant needs beyond openHC's build belongs
+# here; generic hardware bring-up belongs upstream in openHC.
+#
+# EA3 status (2026-08-30, measured on hardware): the board is no longer the
+# blocker the old note here described. openHC installs over SSH with no serial
+# and no button, boots unattended, and pivots to a persistent ext4 root on
+# mmcblk0p1 with ~5.6 GB free; networking works (the "-EIO, no netboot" note
+# above this line was stale). What IS gating Home Assistant now is RAM — see
+# "The RAM problem" at the bottom.
 
-# python3: same reasoning as ea1-ha — not needed by openHC's bare build,
-# needed by Home Assistant, so it lives here.
+# ---- Python ---------------------------------------------------------------
+#
+# Home Assistant Core is a Python application, so the interpreter and its
+# optional modules are the foundation. None of these are cosmetic:
+#   SSL      — the HA frontend, and every integration that talks HTTPS
+#   SQLITE   — the recorder component's database; without it HA has no history
+#   ZLIB     — HTTP compression, and pip
+#   PYEXPAT  — XML, pulled in by more integrations than you would expect
+#   DECIMAL  — exact arithmetic in several energy/sensor integrations
 BR2_PACKAGE_PYTHON3=y
+BR2_PACKAGE_PYTHON3_SSL=y
+BR2_PACKAGE_PYTHON3_SQLITE=y
+BR2_PACKAGE_PYTHON3_ZLIB=y
+BR2_PACKAGE_PYTHON3_PYEXPAT=y
+BR2_PACKAGE_PYTHON3_DECIMAL=y
+BR2_PACKAGE_PYTHON3_UNICODEDATA=y
+
+# ---- Dependencies that must be cross-compiled, not pip-installed ----------
+#
+# This is the crux of packaging HA on an embedded board. Its dependency tree is
+# ~100 packages. Most are pure Python and can be installed at runtime, but a
+# handful carry native extensions that CANNOT be pip-installed on the target:
+# there is no compiler on the box, and PyPI publishes no i686 wheels for them.
+#
+# Those are exactly the ones Buildroot already cross-compiles, so take them from
+# here and leave pip only the pure-Python remainder.
+BR2_PACKAGE_PYTHON_CRYPTOGRAPHY=y   # Rust extension — impractical on-target
+BR2_PACKAGE_PYTHON_AIOHTTP=y        # C accelerators; HA's whole HTTP stack
+BR2_PACKAGE_PYTHON_PYYAML=y         # libyaml bindings; every HA config file
+BR2_PACKAGE_PYTHON_JINJA2=y         # templating
+BR2_PACKAGE_PYTHON_CERTIFI=y        # CA bundle
+BR2_PACKAGE_PYTHON_ATTRS=y
+
+# netifaces: cross-compiled because it CANNOT be built on the target.
+#
+# Home Assistant installs integration requirements with pip AT RUNTIME, and
+# netifaces is the one that fails: PyPI publishes no cp311 wheel for it, so pip
+# falls back to the sdist, needs a C compiler, and there is none on the box.
+# Measured on hardware -- `pip install aiodiscover` died with
+#     ERROR: Failed building wheel for netifaces
+# and the dhcp integration never set up. ha-setup copies this build into the
+# venv after creating it (the venv is deliberately clean, so it is not visible
+# otherwise).
+BR2_PACKAGE_PYTHON_NETIFACES=y
+
+# pip + setuptools on the target so the pure-Python remainder installs into a
+# venv on /data at first boot rather than being baked into the rootfs. That
+# keeps the read-mostly rootfs small and makes HA upgradable without a reflash,
+# which matters because HA releases monthly.
+BR2_PACKAGE_PYTHON_PIP=y
+BR2_PACKAGE_PYTHON_SETUPTOOLS=y
+
+# ---- Storage --------------------------------------------------------------
+#
+# HA's config, database and venv live at /data, which is a DIRECTORY ON p1.
+#
+# It used to be mmcblk0p2, and that was nearly a disaster: p2 is LABEL=recfs,
+# the Control4 FACTORY RECOVERY partition (recfs.tar.xz, recovery kernel,
+# cefdk). It cannot be re-downloaded and cannot be redistributed. See the
+# banner in rootfs-overlay/etc/init.d/S50data. p2 is never touched.
+BR2_PACKAGE_E2FSPROGS=y
+BR2_PACKAGE_E2FSPROGS_RESIZE2FS=y
+
+
+# ---- Overlay ---------------------------------------------------------------
+#
+# NOT set here any more. build/build.sh generates the BR2_ROOTFS_OVERLAY line
+# and appends it after this file, so it is always last and always wins.
+#
+# It used to be hardcoded here, repeating openHC's three overlays and adding
+# ours, because Buildroot has no "+=" and the concatenation is
+# last-assignment-wins. That had two quiet failure modes: it named the openHC
+# board (ea3-v2), so building on any other base silently dropped that board's
+# overlay; and it had to be edited by hand whenever upstream added a layer.
+# Both produce an image that builds fine and is missing files.
+
+# ---- The RAM problem ------------------------------------------------------
+#
+# NOT SOLVED YET, and it decides whether any of the above can actually run.
+#
+# The EA3 has 2 GB of DDR3 fitted, but CEFDK's e820 map declares only the first
+# 200 MB as System RAM and marks 0x0c800000-0x7fffffff (1.8 GB) "device
+# reserved" — a media carve-out for the Intel CE decode/display stack. openHC
+# never loads that stack and nothing claims a byte of the range in /proc/iomem,
+# so it is idle DRAM. Measured on hardware: MemTotal = 190640 kB.
+#
+# Home Assistant Core does not fit in 186 MB. openHC has the fix prepared and
+# deliberately disabled in board/ea3-v2/linux/ea3-v2.fragment:
+#
+#     CONFIG_CMDLINE="... memmap=1024M@0x10000000"
+#
+# It belongs upstream in openHC — it is generic memory bring-up with nothing
+# Home Assistant specific about it — and must be enabled with a serial console
+# attached and widened in stages, because a memmap= over a live range corrupts
+# silently rather than failing. It must also stay clear of the framebuffer at
+# 0x7fc00000: simplefb scans that out and nothing else can, since the SGX545 is
+# a renderer rather than a display engine and the display controllers at
+# 01:08.x have no driver at all. Stopping below 0x78000000 still yields ~1.6 GB.
+#
+# See docs/homeassistant.md for the full plan.

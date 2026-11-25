@@ -1,0 +1,60 @@
+#!/bin/sh
+#
+# Home Assistant Core.
+#
+# S95: after S50data (which mounts /data, where the venv and config live) and
+# after the network. Installation is automatic -- ha-setup runs first and is a
+# no-op once it has succeeded, so a fresh unit installs itself on first boot
+# with nothing to type.
+#
+# The install runs in the BACKGROUND. It takes a long time on this hardware and
+# blocking here would stall the rest of the boot, leaving a box that looks hung
+# when it is merely busy.
+
+DAEMON="/data/venv/bin/hass"
+CFG=/data/homeassistant
+PIDFILE=/var/run/homeassistant.pid
+SETUP=/opt/ha/bin/ha-setup
+
+case "$1" in
+  start)
+	[ -d /data ] || { echo "HA: /data not mounted, skipping"; exit 0; }
+
+	if [ ! -x "$DAEMON" ]; then
+		printf 'HA: not installed yet -- installing in the background\n'
+		printf '    progress: tail -f /data/ha-install.log\n'
+		# Start HA as soon as the install finishes rather than waiting for the
+		# next boot. The install takes tens of minutes on this hardware, and a
+		# box that has finished installing but sits idle until someone power
+		# cycles it reads as a failure.
+		( "$SETUP" >/dev/null 2>&1; [ -x "$DAEMON" ] && "$0" start ) </dev/null >/dev/null 2>&1 &
+		exit 0
+	fi
+
+	printf 'Starting Home Assistant: '
+	# -v is deliberately absent: HA is chatty and the console is a 115200 serial
+	# line shared with the boot log.
+	start-stop-daemon -S -q -m -b -p "$PIDFILE" \
+		-x "$DAEMON" -- --config "$CFG" \
+		&& echo OK || echo FAIL
+	;;
+  stop)
+	printf 'Stopping Home Assistant: '
+	start-stop-daemon -K -q -p "$PIDFILE" && echo OK || echo FAIL
+	rm -f "$PIDFILE"
+	;;
+  restart|reload)
+	"$0" stop; sleep 2; "$0" start
+	;;
+  status)
+	if [ -x "$DAEMON" ]; then
+		echo "installed: yes"
+	else
+		echo "installed: no (see /data/ha-install.log)"
+	fi
+	start-stop-daemon -K -t -q -p "$PIDFILE" && echo "running: yes" || echo "running: no"
+	;;
+  *)
+	echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
+esac
+exit 0

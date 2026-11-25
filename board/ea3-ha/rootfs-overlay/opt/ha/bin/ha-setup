@@ -1,0 +1,143 @@
+#!/bin/sh
+#
+# First-boot installer for Home Assistant Core. Idempotent: safe to re-run, and
+# it is re-run automatically on every boot until it succeeds.
+#
+# WHY A RUNTIME INSTALL AND NOT A BUILDROOT PACKAGE
+# Home Assistant's dependency tree is ~100 packages and it releases monthly.
+# Baking that into the rootfs would mean a reflash per upgrade and a very large
+# image. So the image carries the parts that MUST be cross-compiled (they have
+# native extensions and this box has no compiler), and pip fetches the rest --
+# pure Python -- into a venv on /data, which survives reflashes.
+#
+# The venv is deliberately CLEAN (no --system-site-packages), which reverses
+# the earlier decision here. That flag existed because this board was i686 and
+# PyPI publishes no i686 wheels for orjson, cryptography or ciso8601 -- so the
+# cross-compiled copies had to be visible or pip would try to build them on a
+# box with no compiler. The board is x86_64 now and manylinux wheels exist for
+# all of them, so pip can satisfy HA's exact pins itself.
+#
+# That is strictly better: with system packages visible, Buildroot's versions
+# and HA's pins disagree, and pip resolves the conflict by shadowing them
+# inside the venv anyway -- same download, plus a chance of importing the wrong
+# one. The Buildroot packages stay in the image as a fallback, not a crutch.
+set -u
+
+DATA=/data
+VENV="$DATA/venv"
+CFG="$DATA/homeassistant"
+LOG="$DATA/ha-install.log"
+STAMP="$VENV/.ha-installed"
+# HARD CEILING, not a preference. Buildroot 2024.02.9 ships Python 3.11.10 and
+# Home Assistant requires >=3.12.0 from 2024.4.0 onward (checked against PyPI
+# requires_python, not from memory). 2024.3.3 is the last release that runs on
+# 3.11, so this is the newest HA this image can install.
+#
+# Raising it requires a newer Python, i.e. bumping BUILDROOT_REF -- 2025.02
+# ships 3.13. That is a toolchain-wide change and every kernel patch has to be
+# re-validated against it; it is not a one-line edit here.
+#
+# The symptom if this is set too high is deliberately confusing: pip reports
+# "requires a different Python" and the boot log looks like a network failure.
+HA_VERSION="${HA_VERSION:-2024.3.3}"
+
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
+
+[ -d "$DATA" ] || { echo "ha-setup: $DATA not mounted, nothing to do"; exit 0; }
+[ -f "$STAMP" ] && exit 0          # already installed
+
+mkdir -p "$CFG"
+log "=== ha-setup starting (HA $HA_VERSION) ==="
+log "python: $(python3 -VV 2>&1)  arch: $(uname -m)"
+
+# The install needs the network. Do not fail the boot over it -- just leave the
+# stamp absent so the next boot retries.
+i=0
+while [ $i -lt 30 ]; do
+    ping -c1 -W1 pypi.org >/dev/null 2>&1 && break
+    i=$((i+1)); sleep 2
+done
+if [ $i -ge 30 ]; then
+    log "no network after 60s; will retry on next boot"
+    exit 0
+fi
+
+if [ ! -x "$VENV/bin/python3" ]; then
+    log "creating venv at $VENV"
+    python3 -m venv "$VENV" >> "$LOG" 2>&1 || {
+        log "venv creation FAILED"; exit 0; }
+fi
+
+log "installing homeassistant==$HA_VERSION (this takes a while on this box)"
+
+# CONSTRAINTS ARE APPLIED FROM THE FIRST PIP CALL, and that is the whole point.
+#
+# An unconstrained `pip install homeassistant==2024.3.3` does not merely pick
+# newer packages -- it BACKTRACKS. Measured on this board: pip walked backwards
+# through habluetooth 6.26.5, 6.7.2, 6.1.0 ... and started downloading
+# bluetooth-data-tools SDISTS, which need a C compiler that is not here. It ran
+# for ten minutes without converging and would not have finished.
+#
+# Home Assistant ships this file inside its own wheel, which is useless as a fix
+# because you cannot read it until after the install you are trying to
+# constrain. So it is shipped IN THE IMAGE instead -- 157 pins, no network
+# fetch, no ordering problem, and the same file on every unit.
+CONSTRAINTS=/opt/ha/package_constraints.txt
+
+# josepy is pinned BY HAND because the constraints file does not cover it: it is
+# a transitive of acme, pulled in by hass-nabucasa, so HA never pins it
+# directly. josepy 2.0 removed ComparableX509, which acme 2.8.0 still references
+# at import time, and Home Assistant dies during module import with
+#     AttributeError: module 'josepy' has no attribute 'ComparableX509'
+# which names neither HA nor pip and looks nothing like a version conflict.
+#
+# tzdata is not optional either: Buildroot ships no /usr/share/zoneinfo and
+# Python's zoneinfo has no fallback, so ZoneInfo("America/New_York") raises
+# ZoneInfoNotFoundError and HA cannot resolve a single timestamp.
+if [ -f "$CONSTRAINTS" ]; then
+    CFLAG="-c $CONSTRAINTS"
+    log "using shipped constraints ($(grep -c . "$CONSTRAINTS") pins)"
+else
+    CFLAG=""
+    log "WARNING: $CONSTRAINTS missing -- pip will backtrack and may never finish"
+fi
+
+# --prefer-binary: take a wheel wherever one exists rather than building. On
+# x86_64 that covers every native dependency HA has (orjson, cryptography,
+# aiohttp, ciso8601); falling back to an sdist means a compile, and there is no
+# compiler here. This is why the board is x86_64 -- PyPI publishes no i686 wheel
+# for orjson at any version.
+# shellcheck disable=SC2086
+"$VENV/bin/pip" install --no-cache-dir --prefer-binary $CFLAG \
+    "homeassistant==$HA_VERSION" tzdata "josepy<2" >> "$LOG" 2>&1
+rc=$?
+if [ $rc -ne 0 ]; then
+    log "pip install FAILED (rc=$rc) -- see above; will retry on next boot"
+    log "'requires a different Python' means HA_VERSION is above what python3 here"
+    log "supports; a compiler error means a package fell back to an sdist and needs"
+    log "cross-compiling in ea3-ha_defconfig instead."
+    exit 0
+fi
+
+# Seed netifaces from the cross-compiled copy Buildroot put in system site-packages.
+#
+# Home Assistant pip-installs integration requirements AT RUNTIME, and this is
+# the one that cannot build here: PyPI has no cp311 wheel for netifaces, so
+# `pip install aiodiscover` fails on it and the dhcp integration never sets up.
+# Measured on hardware:
+#     ERROR: Failed building wheel for netifaces
+#     Setup failed for 'dhcp': Requirements for dhcp not found: ['aiodiscover==1.6.1']
+# The venv is deliberately clean (no --system-site-packages), so copy the module
+# in rather than expose the whole system tree. Same interpreter, same ABI.
+SITE=$(python3 -c 'import site; print(site.getsitepackages()[0])' 2>/dev/null)
+VSITE=$(echo "$VENV"/lib/python3.*/site-packages)
+if [ -n "$SITE" ] && [ -d "$VSITE" ]; then
+    for f in "$SITE"/netifaces*; do
+        [ -e "$f" ] && cp -a "$f" "$VSITE/" 2>/dev/null && \
+            log "seeded $(basename "$f") into the venv (dhcp integration needs it)"
+    done
+fi
+
+touch "$STAMP"
+log "=== install complete ==="
+exit 0   # 0 = HA is installed and startable; the caller keys off this

@@ -32,5 +32,5 @@ image:
 		echo "openHC submodule not checked out — run:"; \
 		echo "  git submodule update --init openHC"; exit 1; }
 	DOCKER_BUILDKIT=1 docker build -f build/Dockerfile --target artifacts \
-		--build-arg BOARD=$(BOARD) $(if $(JOBS),--build-arg BR2_JLEVEL=$(JOBS)) \
+		--build-arg BOARD=$(BOARD) $(if $(OPENHC_BOARD),--build-arg OPENHC_BOARD=$(OPENHC_BOARD)) $(if $(JOBS),--build-arg BR2_JLEVEL=$(JOBS)) \
 		--output type=local,dest=output/images .

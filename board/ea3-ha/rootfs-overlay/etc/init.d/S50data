@@ -1,0 +1,57 @@
+#!/bin/sh
+#
+# Provide /data — Home Assistant's persistent home.
+#
+# ############################################################################
+# # mmcblk0p2 IS THE FACTORY RECOVERY PARTITION. NEVER TOUCH IT.             #
+# ############################################################################
+#
+# An earlier version of this script mounted p2 and formatted it when no
+# filesystem was detected. That was very nearly a catastrophe. p2 is LABEL
+# "recfs" and holds Control4's factory restore image:
+#
+#     recfs.tar.xz          489 MB   the factory root filesystem
+#     recovery_kernel.deb   6.7 MB   the recovery kernel
+#     cefdk.deb                      the bootloader package
+#     manifest, common.hcfg
+#
+# That image cannot be downloaded again and cannot be redistributed. Formatting
+# it -- which the old script would have done the first time the filesystem was
+# damaged enough for blkid to miss it -- permanently destroys the only route
+# back to stock firmware on this unit.
+#
+# So /data is a DIRECTORY ON THE ROOTFS (p1), which has ~5.6 GB free against a
+# ~400 MB Home Assistant venv. p1 is already the persistent openHC root, so the
+# configuration and database still survive a reboot. They do not survive a
+# reflash of p1 -- that is the trade, and it is the correct one: an eroded
+# recovery path is worse than an eroded convenience.
+#
+# Partition map, measured on this unit:
+#     mmcblk0p1   6.0 GB   LABEL=openhc   openHC root -- /data lives here
+#     mmcblk0p2   1.0 GB   LABEL=recfs    FACTORY RECOVERY -- DO NOT TOUCH
+#     mmcblk0p3    32 MB   LABEL=logs
+#
+# If a future board genuinely needs a separate data partition, carve it from p1
+# or add a p4. Do not reach for p2.
+
+DIR=/data
+
+case "$1" in
+  start)
+	mkdir -p "$DIR"
+
+	# Belt and braces. If anything ever mounts the recovery partition at
+	# /data, refuse to proceed rather than let Home Assistant write into it.
+	if mount | grep -q "mmcblk0p2 on $DIR"; then
+		echo "Data: REFUSING -- $DIR is the factory recovery partition (p2)"
+		umount "$DIR" 2>/dev/null
+		exit 1
+	fi
+	echo "Data: $DIR on $(df -h "$DIR" | awk 'NR==2{print $1" ("$4" free)"}')"
+	;;
+  stop|restart|reload)
+	;;
+  *)
+	echo "Usage: $0 {start|stop|restart}"; exit 1 ;;
+esac
+exit 0
