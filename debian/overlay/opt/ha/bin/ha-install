@@ -1,0 +1,23 @@
+#!/bin/sh
+# Install or upgrade Home Assistant Core into $HA_DIR/venv. Does nothing when
+# the venv already holds $HA_VERSION.
+#
+# The image carries uv and a Python HA accepts (Debian's own is too old for
+# current HA); uv makes the venv and installs HA from PyPI. The few
+# requirements PyPI has no wheel of for this Python (C extensions such as
+# pymicro-vad) build on the box: the image has gcc for exactly that.
+set -eu
+. /etc/ha-core.conf
+V="$HA_DIR/venv"
+export UV_PYTHON_DOWNLOADS=never UV_LINK_MODE=copy
+
+[ "$(cat "$V/.ha-version" 2>/dev/null)" = "$HA_VERSION" ] && exit 0
+
+echo "ha-install: homeassistant $HA_VERSION into $V"
+mkdir -p "$HA_DIR/config" "$HA_DIR/tmp"
+# Off /tmp: the download is ~130 MB and /tmp is RAM.
+export TMPDIR="$HA_DIR/tmp"
+[ -x "$V/bin/python3" ] || uv venv -q --python "$HA_PYTHON" "$V"
+uv pip install --python "$V/bin/python3" "homeassistant==$HA_VERSION"
+echo "$HA_VERSION" > "$V/.ha-version"
+echo "ha-install: done"

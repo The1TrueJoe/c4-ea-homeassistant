@@ -1,0 +1,23 @@
+# Debian trixie packages for the Home Assistant image (mmdebstrap --include).
+# The base: minbase + these, no recommends. The kernel, its modules and the
+# firmware are openHC's, not Debian's.
+
+# system
+systemd systemd-sysv systemd-timesyncd udev dbus kmod
+iproute2 iputils-ping procps psmisc busybox
+openssh-server ca-certificates tzdata
+e2fsprogs kexec-tools usbutils i2c-tools less nano
+
+# what openHC's init scripts start (they run the Debian binaries)
+mosquitto mosquitto-clients avahi-daemon avahi-utils libnss-mdns
+alsa-utils ksmbd-tools hostapd dnsmasq iw wireless-regdb
+v4l-utils
+
+# audio for Music Assistant
+# (Debian's shairport-sync is classic AirPlay; trixie has no nqptp for AirPlay 2)
+ffmpeg squeezelite shairport-sync
+
+# Home Assistant and Music Assistant: their venvs live on /data and install on
+# first boot; a few requirements have no wheel for HA's Python and build here.
+build-essential pkg-config libffi-dev libssl-dev libjpeg-dev zlib1g-dev
+libturbojpeg0 libpcap0.8 libasound2-dev

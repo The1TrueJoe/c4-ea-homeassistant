@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# The EA boards openHC defines, one per line: every board/ea/<b>/<b>_defconfig
-# except the family base.
+# The EA boards openHC defines, one per line: every
+# board/ea/<family>/<board>/<board>_defconfig.
 set -euo pipefail
 OPENHC_DIR="${1:-$(cd "$(dirname "$0")/.." && pwd)/openHC}"
-for d in "$OPENHC_DIR"/board/ea/*/; do
-    b=$(basename "$d")
-    [ "$b" != common ] && [ -f "$d/${b}_defconfig" ] && echo "$b"
+for f in "$OPENHC_DIR"/board/ea/*/*/*_defconfig; do
+    b=$(basename "$(dirname "$f")")
+    [ "$(basename "$f")" = "${b}_defconfig" ] && echo "$b"
 done

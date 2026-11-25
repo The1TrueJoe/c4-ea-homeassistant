@@ -1,0 +1,9 @@
+#!/bin/sh
+# PID 1 on p1. CEFDK boots openHC's small bootstrap kernel; its S00kexec
+# (openHC's, unchanged) hands off to the full kernel in /boot. Buildroot runs
+# that as its first boot script; under systemd it has to run before systemd,
+# so it runs here. On the full kernel (ohc_kexec= on its command line) it
+# returns at once, and systemd starts.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+[ -x /etc/init.d/S00kexec ] && /etc/init.d/S00kexec start
+exec /lib/systemd/systemd "$@"

@@ -1,0 +1,110 @@
+#!/opt/python/bin/python3
+"""Announce what openHC serves over MQTT but does not announce to Home Assistant.
+
+iod already publishes MQTT discovery for its relays (switch) and contacts
+(binary_sensor), and zigbee-bridge for every Zigbee device. This adds the rest,
+on the box's HA device (iod's) and iod's availability topic:
+
+  IR out jacks + front blaster   notify (the message is a Pronto code: sends it)
+  front IR receiver              event  (fires "received" with the Pronto code)
+  serial ports                   notify (write), select (baud), event (rx)
+  Zigbee                         switch "permit join" (opens joining for 254 s),
+                                 on zigbee-bridge's own availability
+
+notify, not text: a text entity caps its value at 255 characters, and a
+Pronto code is usually longer.
+
+It reads the box's IO from iod's API and its topic base from iod's settings,
+then publishes retained configs with mosquitto_pub. mosquitto keeps no
+persistence on openHC, so S97homeassistant runs this on every start.
+"""
+import json
+import subprocess
+import sys
+import time
+import urllib.request
+
+IOD = "http://127.0.0.1:7070"
+
+
+def get(path):
+    for _ in range(30):  # iod may still be starting
+        try:
+            with urllib.request.urlopen(IOD + path, timeout=5) as r:
+                return json.load(r)
+        except OSError:
+            time.sleep(2)
+    sys.exit(f"ohc-ha-discovery: iod not answering on {IOD}{path}")
+
+
+def configs(io, mqtt):
+    base = f"{mqtt['prefix']}/{mqtt['client_id']}"
+    uid = mqtt["client_id"]
+    common = {
+        # Same identifiers as iod's own discovery, so it is one device in HA.
+        "device": {"identifiers": [uid]},
+        "availability": [{"topic": f"{base}/status"}],
+    }
+
+    def entity(kind, key, name, **doc):
+        doc = {"name": name, "unique_id": f"{uid}_{key}", **common, **doc}
+        return f"{mqtt['discovery']}/{kind}/{uid}_{key}/config", doc
+
+    ir = io.get("ir") or {}
+    if (ir.get("front") or {}).get("send"):
+        yield entity("notify", "ir_front_send", "IR front blaster",
+                     command_topic=f"{base}/cmd/ir/front/send",
+                     icon="mdi:remote")
+    if (ir.get("front") or {}).get("receive"):
+        yield entity("event", "ir_front_rx", "IR received",
+                     state_topic=f"{base}/event/ir/front/rx",
+                     event_types=["received"], icon="mdi:remote",
+                     value_template='{"event_type":"received","pronto":{{ value_json.pronto | tojson }}}')
+    for j in ir.get("jacks", []):
+        n = j["jack"]
+        yield entity("notify", f"ir{n}_send", f"IR {n} send",
+                     command_topic=f"{base}/cmd/ir/{n}/send",
+                     icon="mdi:remote")
+    for s in io.get("serials", []):
+        n = s["jack"]
+        yield entity("notify", f"serial{n}_write", f"Serial {n} write",
+                     command_topic=f"{base}/cmd/serial/{n}/write",
+                     icon="mdi:serial-port")
+        yield entity("select", f"serial{n}_baud", f"Serial {n} baud",
+                     command_topic=f"{base}/cmd/serial/{n}/baud",
+                     state_topic=f"{base}/state/serial/{n}/baud",
+                     options=[str(b) for b in s.get("bauds", [])],
+                     entity_category="config", icon="mdi:speedometer")
+        yield entity("event", f"serial{n}_rx", f"Serial {n} received",
+                     state_topic=f"{base}/event/serial/{n}/rx",
+                     event_types=["received"], icon="mdi:serial-port",
+                     # b64 as iod sends it, plus the bytes as text for the
+                     # common case of a line-based protocol.
+                     value_template='{"event_type":"received","b64":{{ value_json.b64 | tojson }},'
+                                    '"text":{{ value_json.b64 | base64_decode | tojson }}}')
+    # zigbee-bridge (openHC's zigbee feature) under <base>/zigbee. Announced on
+    # every EA; on a box without the bridge it just stays unavailable.
+    z = f"{base}/zigbee/bridge"
+    yield entity("switch", "zigbee_permit_join", "Zigbee permit join",
+                 command_topic=f"{z}/request/permit_join",
+                 payload_on='{"time": 254}', payload_off='{"time": 0}',
+                 state_on="ON", state_off="OFF",
+                 state_topic=f"{z}/info",
+                 value_template="{{ 'ON' if value_json.permit_join else 'OFF' }}",
+                 availability=[{"topic": f"{z}/state", "value_template": "{{ value_json.state }}",
+                                "payload_available": "online", "payload_not_available": "offline"}],
+                 icon="mdi:zigbee")
+
+
+def main():
+    mqtt = get("/api/config")["mqtt"]
+    if not mqtt.get("discovery"):
+        return  # discovery turned off in iod's settings
+    for topic, doc in configs(get("/api/io"), mqtt):
+        subprocess.run(["mosquitto_pub", "-h", "127.0.0.1", "-r", "-q", "1",
+                        "-t", topic, "-m", json.dumps(doc)], check=True)
+        print("ohc-ha-discovery:", topic)
+
+
+if __name__ == "__main__":
+    main()

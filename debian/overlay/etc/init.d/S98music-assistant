@@ -1,0 +1,85 @@
+#!/bin/sh
+# Music Assistant server on :8095 (data in $MA_DIR/data), and one squeezelite
+# player per openHC output PCM, so MA plays out of the box's own jacks.
+#
+# The players are MA's Squeezelite provider's (slimproto, :3483): each one is
+# a squeezelite on 127.0.0.1 playing into openHC's shared PCM (ohc_analog,
+# ohc_coax, ohc_hdmi). Those are dmix, so they mix with anything else openHC
+# plays. A PCM the board does not have is skipped.
+#
+# The first boot (and the first after a version bump) installs MA from its
+# release wheel before starting. Logged to syslog as music-assistant.
+. /etc/music-assistant.conf
+PIDFILE=/var/run/music-assistant.pid
+V="$MA_DIR/venv"
+
+run() {
+    export PATH="$V/bin:$PATH" VIRTUAL_ENV="$V" TMPDIR="$MA_DIR/tmp" \
+        UV_CONSTRAINT=/etc/music-assistant.constraints
+    mkdir -p "$TMPDIR"
+    until /opt/ha/bin/ma-install >>"$MA_DIR/install.log" 2>&1; do
+        logger -t music-assistant "install failed (see $MA_DIR/install.log), retrying in 60 s"
+        sleep 60
+    done
+    while :; do
+        rm -f "$TMPDIR/mass.rc"
+        { mass --data-dir "$MA_DIR/data" --cache-dir "$MA_DIR/cache"; echo $? >"$TMPDIR/mass.rc"; } 2>&1 \
+            | logger -t music-assistant
+        rc=$(cat "$TMPDIR/mass.rc" 2>/dev/null || echo 1)
+        [ "$rc" = 0 ] && break
+        logger -t music-assistant "mass exited $rc, restarting in 10 s"
+        sleep 10
+    done
+}
+
+# A stable, locally administered MAC per player (MA keys players by it):
+# eth0's, with the first octet 02 and the last plus the player's index.
+mac() {
+    m=$(cat /sys/class/net/eth0/address 2>/dev/null || echo 00:00:00:00:00:00)
+    rest=${m#*:}
+    printf '02:%s:%02x' "${rest%:*}" $(( (0x${m##*:} + $1) & 255 ))
+}
+
+players() {
+    # Named like openHC's own endpoints: the product ("EA-3", from the device
+    # tree's "Control4 EA-3 v1") and the output.
+    prefix=$MA_PLAYER_PREFIX
+    [ -n "$prefix" ] || set -- $(tr -d '\0' </proc/device-tree/model 2>/dev/null)
+    prefix=${prefix:-${2:-openHC}}
+    i=0
+    for p in $MA_PLAYERS; do
+        i=$((i + 1))
+        pcm=${p%%=*} name=${p#*=}
+        grep -q "^pcm\.$pcm " /etc/asound.conf 2>/dev/null || continue
+        start-stop-daemon -S -q -b -m -p "/var/run/squeezelite-$pcm.pid" \
+            --exec /usr/bin/squeezelite -- -s 127.0.0.1 -o "$pcm" \
+            -n "$prefix $name" -m "$(mac $i)" -C 5
+        echo "music-assistant: squeezelite \"$prefix $name\" on $pcm"
+    done
+}
+
+case "$1" in
+    start)
+        start-stop-daemon -S -q -b -m -p "$PIDFILE" --exec "$0" -- run \
+            && echo "music-assistant: starting on :8095 (first boot installs it first)"
+        players
+        ;;
+    stop)
+        for f in /var/run/squeezelite-*.pid; do
+            [ -f "$f" ] && start-stop-daemon -K -q -p "$f"
+            rm -f "$f"
+        done
+        [ -f "$PIDFILE" ] && start-stop-daemon -K -q -p "$PIDFILE"
+        rm -f "$PIDFILE"
+        killall mass 2>/dev/null
+        for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+            pidof mass >/dev/null || break
+            sleep 1
+        done
+        # A mass that ignored SIGTERM would hold :8095 against the next start.
+        killall -9 mass 2>/dev/null
+        ;;
+    restart) "$0" stop; "$0" start ;;
+    run) run ;;
+    *) echo "usage: $0 {start|stop|restart}"; exit 1 ;;
+esac

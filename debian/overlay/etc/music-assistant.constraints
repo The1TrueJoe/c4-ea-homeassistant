@@ -1,0 +1,9 @@
+# Constraints for every package Music Assistant installs into its venv
+# (UV_CONSTRAINT, set by ma-install and S98music-assistant).
+#
+# numpy 2.4+ wheels need x86-64-v2 (SSE4.2/POPCNT): SIGILL on the EA's Atom.
+numpy<2.4
+# Smart Fades and Sonic Analysis need torch, which from PyPI drags in ~4 GB of
+# CUDA and fills the eMMC partway through. Unsatisfiable, so adding one of
+# those providers fails at once instead.
+torch<0

@@ -1,37 +1,33 @@
-# c4-ea-homeassistant — openHC EA images with Home Assistant on top.
+# c4-ea-homeassistant — openHC's EA images with Home Assistant, on Debian.
 #
-# Boards come from openHC (openHC/board/ea/<board>); this repo adds one layer,
-# board/ha_defconfig, to whichever is built. See build/build.sh.
+# The image is openHC's own bundle for the board (kernel, bootstrap, boot-init,
+# daemons, modules, firmware, config) with a Debian root in place of
+# Buildroot's. See debian/build.sh.
 
-BOARD ?= ea3-v2
+BOARD ?= ea3-v1
 BOARDS := $(shell build/boards.sh 2>/dev/null)
+# An openHC bundle (.zip or folder) for $(BOARD). Unset: download the one
+# openHC's CI built for the submodule's commit (needs gh).
+OPENHC_BUNDLE ?=
+OUT ?= output/openhc-ha-$(BOARD).zip
 
-.PHONY: help boards daemons image defconfig
+.PHONY: help boards bundle image
 
 help:
-	@echo "c4-ea-homeassistant — openHC EA image + Home Assistant layer"
+	@echo "c4-ea-homeassistant — openHC EA image with Home Assistant (Debian)"
 	@echo ""
-	@echo "  make daemons   [BOARD=...]   stage openHC's daemons into its overlay (rustup + node)"
-	@echo "  make image     [BOARD=...]   build the image (Docker Buildroot)"
-	@echo "  make defconfig [BOARD=...]   print the composed defconfig, build nothing"
+	@echo "  make image  [BOARD=...] [OPENHC_BUNDLE=path]   build $(OUT)"
+	@echo "  make bundle [BOARD=...]                        fetch openHC's bundle for the submodule's commit"
 	@echo ""
 	@echo "  current BOARD=$(BOARD)   (openHC EA boards: $(BOARDS))"
-	@echo ""
-	@echo "  Needs the openHC submodule: git submodule update --init --recursive"
 
 boards:
 	@build/boards.sh
 
-daemons:
-	bash openHC/packages/build.sh $(BOARD)
+bundle:
+	build/openhc-bundle.sh $(BOARD) output/openhc-$(BOARD).zip
 
-image:
-	@test -f openHC/build/build.sh || { \
-		echo "openHC submodule not checked out — run:"; \
-		echo "  git submodule update --init --recursive"; exit 1; }
-	DOCKER_BUILDKIT=1 docker build -f build/Dockerfile --target artifacts \
-		--build-arg BOARD=$(BOARD) $(if $(JOBS),--build-arg BR2_JLEVEL=$(JOBS)) \
-		--output type=local,dest=output/images .
-
-defconfig:
-	@OHC_DEFCONFIG_ONLY=1 BOARD=$(BOARD) build/build.sh
+image: $(if $(OPENHC_BUNDLE),,bundle)
+	docker run --rm --privileged --platform linux/amd64 -v "$(CURDIR)":/repo -w /repo debian:trixie \
+		sh -c 'apt-get update -qq && apt-get install -y -qq mmdebstrap e2fsprogs unzip zip curl ca-certificates >/dev/null && ln -sf bash /bin/sh && \
+		       debian/build.sh "$(or $(OPENHC_BUNDLE),output/openhc-$(BOARD).zip)" "$(OUT)"'

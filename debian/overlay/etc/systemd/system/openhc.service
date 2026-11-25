@@ -1,0 +1,20 @@
+# openHC's services (iod, audiod, sysmond, webd, the radios, mosquitto, avahi,
+# and this image's Home Assistant and Music Assistant), started by openHC's own
+# init scripts through /usr/lib/openhc/rc.
+[Unit]
+Description=openHC services
+Wants=network-online.target systemd-udev-settle.service
+After=network.target systemd-udevd.service dbus.service systemd-timesyncd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Busybox applets the scripts expect (udhcpc, logread, devmem, ...) come last,
+# after Debian's own tools of the same name.
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/openhc/busybox
+ExecStart=/usr/lib/openhc/rc start
+ExecStop=/usr/lib/openhc/rc stop
+TimeoutStartSec=10min
+
+[Install]
+WantedBy=multi-user.target

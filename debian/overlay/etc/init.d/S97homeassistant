@@ -18,6 +18,9 @@ run() {
         logger -t homeassistant "install failed (see $HA_DIR/install.log), retrying in 60 s"
         sleep 60
     done
+    # Retained MQTT discovery for the IO iod does not announce (and Zigbee's
+    # permit join); mosquitto keeps nothing across a restart.
+    /opt/ha/bin/ohc-ha-discovery 2>&1 | logger -t homeassistant
     while :; do
         rm -f "$TMPDIR/hass.rc"
         { hass --config "$HA_DIR/config"; echo $? >"$TMPDIR/hass.rc"; } 2>&1 \

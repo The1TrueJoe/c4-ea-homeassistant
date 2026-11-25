@@ -1,0 +1,24 @@
+#!/bin/sh
+# Run openHC's own boot scripts (/etc/init.d/S??*, as openHC ships them) in
+# order, the way its Buildroot rcS does: start ascending, stop descending.
+#
+# Debian brings the base system (udev, D-Bus, journald, networking time, ssh),
+# so the scripts for those are skipped; every other S script runs, including
+# ones a newer openHC adds. That is what keeps this image in step with openHC
+# without a list per release.
+SKIP="S00kexec S01seedrng S01syslogd S02klogd S02sysctl S02watchdog
+S10udevd S30dbus-daemon S40network S44ntpd S50crond S50dropbear S95ohc-display"
+
+skip() { for s in $SKIP; do [ "$1" = "$s" ] && return 0; done; return 1; }
+
+case "$1" in
+    start) list=$(ls /etc/init.d/S[0-9][0-9]* 2>/dev/null) ;;
+    stop)  list=$(ls -r /etc/init.d/S[0-9][0-9]* 2>/dev/null) ;;
+    *) echo "usage: $0 {start|stop}"; exit 1 ;;
+esac
+for f in $list; do
+    [ -x "$f" ] || continue
+    skip "${f##*/}" && continue
+    "$f" "$1"
+done
+exit 0

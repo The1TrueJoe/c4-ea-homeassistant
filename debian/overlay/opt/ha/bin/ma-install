@@ -1,0 +1,47 @@
+#!/bin/sh
+# Install or upgrade the Music Assistant server into $MA_DIR/venv from its
+# GitHub release wheel (MA is not on PyPI). Does nothing when the venv already
+# holds $MA_VERSION.
+#
+# Its own venv, not Home Assistant's: the two pin different aiohttp/orjson.
+# Left out of its requirements: torch, torchaudio and librosa (smart
+# fades and sonic analysis, optional providers that import them lazily; torch
+# alone is ~1 GB) and aiolibdatachannel (WebRTC remote access, a git build
+# with no wheel, also imported lazily).
+#
+# numpy stays in, at MA's pin (2.3.x): numpy 2.4+ wheels need x86-64-v2 and
+# die with SIGILL on the EA's Atom (no SSE4.2/POPCNT), and an unpinned
+# dependency pulls one. /etc/music-assistant.constraints holds that line for
+# the installs MA does itself later (UV_CONSTRAINT, set by S98music-assistant).
+set -eu
+. /etc/music-assistant.conf
+V="$MA_DIR/venv"
+export UV_CONSTRAINT=/etc/music-assistant.constraints UV_PYTHON_DOWNLOADS=never UV_LINK_MODE=copy
+
+[ "$(cat "$V/.ma-version" 2>/dev/null)" = "$MA_VERSION" ] && exit 0
+
+echo "ma-install: music-assistant $MA_VERSION into $V"
+mkdir -p "$MA_DIR/data" "$MA_DIR/tmp"
+export TMPDIR="$MA_DIR/tmp"
+[ -x "$V/bin/python3" ] || uv venv -q --python "$MA_PYTHON" "$V"
+UV="uv pip install --python $V/bin/python3"
+$UV --no-deps "https://github.com/music-assistant/server/releases/download/$MA_VERSION/music_assistant-$MA_VERSION-py3-none-any.whl"
+# Plus the requirements of the providers that load on every start (builtin)
+# and of hass, whose client the core imports. MA installs any other
+# provider's requirements itself when that provider is added.
+"$V/bin/python3" - >"$TMPDIR/ma-reqs.txt" <<'PY'
+import importlib.metadata as m, json, pathlib, re
+import music_assistant
+skip = {"torch", "torchaudio", "librosa", "aiolibdatachannel"}
+for r in m.requires("music-assistant") or []:
+    name = re.split(r"[\s\[<>=!~;@]", r, maxsplit=1)[0].lower().replace("_", "-")
+    if "extra ==" not in r and name not in skip:
+        print(r)
+for f in pathlib.Path(music_assistant.__file__).parent.glob("providers/*/manifest.json"):
+    d = json.loads(f.read_text())
+    if d.get("builtin") or d["domain"] == "hass":
+        print(*d.get("requirements", []), sep="\n")
+PY
+$UV -r "$TMPDIR/ma-reqs.txt"
+echo "$MA_VERSION" > "$V/.ma-version"
+echo "ma-install: done"

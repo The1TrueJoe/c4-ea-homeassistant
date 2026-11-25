@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# Build the Home Assistant image for an openHC EA board: openHC's own bundle
+# with its rootfs.ext2 replaced by a Debian trixie root.
+#
+#   debian/build.sh <openhc-bundle.zip|dir> <out.zip>
+#
+# Runs as root on Debian (in CI and `make image`: a privileged debian:trixie
+# container). From openHC's bundle it keeps, unchanged: the kernel, the
+# bootstrap and boot-init (the flasher writes those to the eMMC slots), and
+# from its rootfs /opt/ohc (the daemons, static), /lib/modules, /lib/firmware,
+# /boot (the full kernel S00kexec hands off to) and /etc (no-clobber: openHC's
+# init scripts and config, where Debian has nothing of the same name). A newer
+# openHC therefore lands here by bumping the submodule; only a new compiled
+# userspace program in openHC needs its Debian package added to `packages`.
+set -euo pipefail
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+REPO=$(dirname "$HERE")
+BUNDLE=$1
+OUT=$(realpath -m "$2")
+SUITE=${SUITE:-trixie}
+MIRROR=${MIRROR:-http://deb.debian.org/debian}
+W=$(mktemp -d /tmp/ohc-debian.XXXXXX)
+R=$W/rootfs
+trap 'umount -R "$R/proc" "$R/sys" "$R/dev" 2>/dev/null || true' EXIT
+
+echo ">> openHC bundle: $BUNDLE"
+mkdir -p "$W/in"
+if [ -d "$BUNDLE" ]; then cp -a "$BUNDLE/." "$W/in/"; else unzip -q "$BUNDLE" -d "$W/in"; fi
+IN=$(dirname "$(find "$W/in" -name 'rootfs.ext2*' | head -1)")
+[ -f "$IN/rootfs.ext2" ] || gunzip "$IN/rootfs.ext2.gz"
+for f in bzImage boot-init.cpio.gz rootfs.ext2; do
+    [ -f "$IN/$f" ] || { echo "not an openHC EA bundle: no $f" >&2; exit 1; }
+done
+
+echo ">> what the image takes from openHC's rootfs"
+O=$W/openhc
+for d in opt/ohc lib/modules lib/firmware boot etc usr/share/udhcpc; do
+    mkdir -p "$O/$(dirname "$d")"
+    debugfs -R "rdump /$d $O/$(dirname "$d")" "$IN/rootfs.ext2" 2>/dev/null || true
+done
+[ -x "$O/opt/ohc/bin/iod" ] || { echo "openHC rootfs has no /opt/ohc/bin/iod" >&2; exit 1; }
+cat "$O/etc/openhc-release"
+
+echo ">> Debian $SUITE"
+pkgs=$(grep -v '^#' "$HERE/packages" | tr -s ' \n' ',' | sed 's/^,//; s/,$//')
+mmdebstrap --variant=minbase --include="$pkgs" \
+    --aptopt='APT::Install-Recommends "false"' \
+    --dpkgopt='path-exclude=/usr/share/doc/*' --dpkgopt='path-include=/usr/share/doc/*/copyright' \
+    --dpkgopt='path-exclude=/usr/share/man/*' --dpkgopt='path-exclude=/usr/share/locale/*' \
+    "$SUITE" "$R" "$MIRROR"
+
+echo ">> openHC into it"
+cp -a "$O/opt/." "$R/opt/"
+cp -a "$O/lib/modules" "$O/lib/firmware" "$R/usr/lib/"
+cp -a "$O/boot/." "$R/boot/"
+[ -d "$O/usr/share/udhcpc" ] && cp -a "$O/usr/share/udhcpc" "$R/usr/share/"
+# No-clobber: Debian's files win where both exist (passwd, os-release, ...);
+# everything only openHC has (init.d/S*, asound.conf, openhc/, udev rules,
+# openhc-release, mosquitto and avahi config) comes across.
+cp -an "$O/etc/." "$R/etc/"
+# ...except these, which openHC must own.
+for f in asound.conf mosquitto/mosquitto.conf openhc-release; do
+    [ -e "$O/etc/$f" ] && cp -a "$O/etc/$f" "$R/etc/$f"
+done
+# Buildroot's inittab/fstab mean nothing to systemd; this is the root.
+rm -f "$R/etc/inittab"
+printf '/dev/mmcblk0p1 / ext4 rw,noatime 0 1\n' > "$R/etc/fstab"
+printf 'variant=debian-%s homeassistant\n' "$SUITE" >> "$R/etc/openhc-release"
+
+echo ">> this repo's layer"
+cp -a "$HERE/overlay/." "$R/"
+
+echo ">> uv, and HA's Python (baseline x86-64: the EA's Atom has no SSE4)"
+UV_VERSION=${UV_VERSION:-0.13.10}
+curl -fsSL "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-x86_64-unknown-linux-musl.tar.gz" \
+    | tar xz -C "$R/usr/local/bin" --strip-components=1
+# Name the plain x86_64 build: on a newer CPU uv would pick an x86_64_v3 one.
+UV_PYTHON_INSTALL_DIR="$R/opt/python-dist" "$R/usr/local/bin/uv" python install \
+    "cpython-${PYTHON_VERSION:-3.14}-linux-x86_64-gnu"
+py=$(cd "$R/opt/python-dist" && ls -d cpython-*-linux-x86_64-gnu | grep -E '^cpython-[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -1)
+ln -sfn "python-dist/$py" "$R/opt/python"
+
+echo ">> configure in the root"
+mount -t proc proc "$R/proc"; mount -t sysfs sys "$R/sys"; mount --bind /dev "$R/dev"
+cp "$REPO/openHC/packages/alsa-ohceq/ohceq.c" "$R/tmp/"
+chroot "$R" /bin/sh -eux <<'CHROOT'
+# openHC's ALSA tone plugin (asound.conf's coax/HDMI chains), against Debian's alsa-lib
+mkdir -p /usr/lib/x86_64-linux-gnu/alsa-lib
+gcc -O2 -shared -fPIC -DPIC -Wall -o /usr/lib/x86_64-linux-gnu/alsa-lib/libasound_module_pcm_ohceq.so /tmp/ohceq.c -lasound -lm
+rm /tmp/ohceq.c
+# busybox applets openHC's scripts use that Debian lacks (udhcpc, logread, devmem...)
+mkdir -p /usr/lib/openhc/busybox
+busybox --install -s /usr/lib/openhc/busybox
+# PID 1: S00kexec first, then systemd (usr/sbin/init.openhc)
+dpkg-divert --local --rename --divert /usr/sbin/init.systemd --add /usr/sbin/init
+ln -sf init.openhc /usr/sbin/init
+# openHC's scripts start these themselves
+systemctl mask mosquitto.service avahi-daemon.service avahi-daemon.socket dnsmasq.service \
+    hostapd.service shairport-sync.service squeezelite.service
+systemctl enable openhc.service ssh.service systemd-timesyncd.service
+echo root:openhc | chpasswd
+echo openhc > /etc/hostname
+rm -f /etc/resolv.conf && touch /etc/resolv.conf
+# kexec-tools must not take over reboots
+rm -f /etc/default/kexec
+apt-get clean; rm -rf /var/lib/apt/lists/* /var/cache/* /var/log/*.log
+CHROOT
+umount -R "$R/proc" "$R/sys" "$R/dev"
+
+echo ">> rootfs.ext2"
+mb=$(( $(du -sm "$R" | cut -f1) * 5 / 4 + 256 ))
+rm "$IN/rootfs.ext2"
+mke2fs -q -t ext4 -L openhc -d "$R" "$IN/rootfs.ext2" "${mb}M"
+echo "   ${mb} MB (the box grows it to the whole partition on first boot)"
+
+echo ">> $OUT"
+mkdir -p "$(dirname "$OUT")"
+rm -f "$OUT"
+(cd "$IN" && zip -q -r "$OUT" .)
+ls -la "$OUT"
