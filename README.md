@@ -75,20 +75,17 @@ git add openHC && git commit -m "openHC: bump to <sha>"
 
 ## Status
 
+- [x] The Debian image on an EA-3 (installed over SSH, no serial): systemd,
+      openHC's services and IO, eth0 up; HA and MA installed on first boot.
 - [x] openHC IO in Home Assistant over MQTT discovery: relays and contacts
       from iod; IR, serial and Zigbee joining from `ohc-ha-discovery`.
-      Relay switched from HA on an EA-3.
+      Relay switched from HA on the EA-3 (iod reported it on and off).
 - [x] Zigbee through openHC's zigbee-bridge (MQTT discovery); network formed
-      on an EA-3's EM357. A paired device: not yet.
+      on the EA-3's EM357, permit join in HA. A paired device: not yet.
 - [x] Music Assistant with a squeezelite player per output; played to the
-      EA-3's analog output from Home Assistant. AirPlay into MA through its
-      AirPlay Receiver plugin.
-- [x] The Debian image boots in QEMU on openHC's full kernel: systemd,
-      openhc.service and openHC's scripts, the root grown, eth0 up.
-- [ ] The Debian image on an EA. The first install on an EA-3 did not come
-      back on the network (before the first-boot guard existed); not yet
-      diagnosed. Everything else above ran on a Buildroot openHC box with
-      Python and the services added by hand; the same scripts are in this
-      image.
+      EA-3's analog output from Home Assistant (the analog PCM running).
+- [x] openHC's AirPlay 2 endpoints (shairport-sync and nqptp built in the
+      image), one per output, advertised as AirPlay 2.
+- [x] The Debian image boots in QEMU on openHC's full kernel.
 - [ ] Bluetooth LE: openHC's kernel support for the EA-3's onboard Bluetooth,
       and its Bluetooth bridge's discovery.

@@ -13,7 +13,29 @@
 PIDFILE=/var/run/music-assistant.pid
 V="$MA_DIR/venv"
 
+# Spotify is Music Assistant's (its Spotify Connect plugin), so openHC's own
+# Spotify Connect endpoints go off; its AirPlay 2 ones stay (audiod's board
+# defaults, one per output). Once: with no saved map yet, audiod is on its
+# defaults; saving this one hands the map to openHC's Audio page from then on.
+spotify_off() {
+    [ -e /data/ohc/audio.json ] && return 0
+    python3 - <<'EOF' && logger -t music-assistant "openHC's Spotify Connect endpoints off"
+import json, time, urllib.request as u
+A = "http://127.0.0.1:7072/api/audio"
+for _ in range(60):
+    try:
+        m = json.load(u.urlopen(A))["map"]; break
+    except OSError:
+        time.sleep(1)
+else:
+    raise SystemExit("audiod never answered")
+m["spotify"] = []
+u.urlopen(u.Request(A + "/endpoints", json.dumps(m).encode(), {"Content-Type": "application/json"}, method="PUT"))
+EOF
+}
+
 run() {
+    spotify_off
     export PATH="$V/bin:$PATH" VIRTUAL_ENV="$V" TMPDIR="$MA_DIR/tmp" \
         UV_CONSTRAINT=/etc/music-assistant.constraints
     mkdir -p "$TMPDIR"

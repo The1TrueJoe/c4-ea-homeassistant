@@ -50,7 +50,7 @@ Releases, or the `images` workflow's artifacts for a commit), then:
 
 The flasher writes the kernel, reboots the box into openHC's installer,
 writes the system to p1 and reboots again. The box comes back at the same
-address, named `openea<n>-<mac>`.
+address, named `openhc-<MAC>`.
 
 If the first boot gets no network address within five minutes, the box goes
 back to openHC's installer by itself (reachable over SSH as during the
@@ -80,7 +80,7 @@ Assistant discovery, so only the MQTT integration is needed:
 1. Settings → Devices & services → **Add integration** → **MQTT**.
 2. Broker `127.0.0.1`, port `1883`, no username or password.
 
-A device named after the box (`openea3-…`) appears with:
+A device named after the box (`openhc-<MAC>`) appears with:
 
 | Entity | What it does |
 |---|---|
@@ -99,6 +99,19 @@ every device to Home Assistant over the same MQTT. To pair one, turn on
 **Zigbee permit join** and put the device in pairing mode; it appears as a
 device of its own.
 
+![The box in Home Assistant](img/ha-openhc-device.png)
+
+If the box ran openHC before, its radio still holds that install's Zigbee
+network, whose keys went with the old system, and the bridge will not wipe a
+network it does not know. Its log (`journalctl -t zigbee-bridge`) then says
+*refusing to replace it*. To let it form a new one (devices paired to the old
+network have to be paired again):
+
+```sh
+printf '\n[network]\nreplace_other = true\n' >> /run/ohc/zigbee-bridge.toml
+sleep 15; sed -i '/^\[network\]/,$d' /run/ohc/zigbee-bridge.toml
+```
+
 **Bluetooth LE:** not yet (openHC's kernel support for the EA-3's onboard
 Bluetooth is open).
 
@@ -108,17 +121,27 @@ Music Assistant runs next to Home Assistant on `http://<ip>:8095`, with one
 squeezelite player per output (`EA-3 Analog`, `EA-3 Coax`, `EA-3 HDMI`)
 playing into openHC's outputs.
 
-1. Open `http://<ip>:8095` and create the admin account.
+1. Open `http://<ip>:8095` and create the admin account. Music Assistant only
+   takes it in the first 15 minutes after it starts; if it says setup timed
+   out, restart it (`/etc/init.d/S98music-assistant restart`) and try again.
 2. The setup wizard lists the players it found on your network. Switch off
    any you don't want Music Assistant to use, then **Add more players** →
-   **Squeezelite**. The box's outputs appear.
+   **Squeezelite**. The box's outputs appear as squeezelite players.
+
+   Each output also shows up a second time as an AirPlay player: that is
+   openHC's AirPlay 2 receiver for phones (below). Switch those three off in
+   Music Assistant (Settings → Players, or in the wizard) so it plays through
+   the squeezelite ones.
 
    ![Music Assistant player providers](img/ma-player-providers.png)
    ![The box's outputs as players](img/ma-players.png)
 
 3. In Home Assistant: **Add integration** → **Music Assistant**, URL
-   `http://127.0.0.1:8095`, and sign in with the Music Assistant account.
-   Each output becomes a `media_player`.
+   `http://<ip>:8095` (the box's address, not `127.0.0.1`: Home Assistant
+   opens Music Assistant's sign-in page in your browser), and sign in with
+   the Music Assistant account. Each output becomes a `media_player`.
+
+   ![An output in Home Assistant](img/ha-media-player.png)
 
 **Phones.** Each output is an **AirPlay 2** receiver straight away: openHC's
 own AirPlay endpoints, which play into the output beside Music Assistant.
