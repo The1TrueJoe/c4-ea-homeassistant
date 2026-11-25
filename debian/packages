@@ -20,7 +20,7 @@ ffmpeg squeezelite
 # source by build.sh as openHC's Buildroot builds them (Debian's shairport-sync
 # is classic AirPlay only, and trixie has no nqptp). Their build dependencies:
 autoconf automake libtool xxd libpopt-dev libconfig-dev libdaemon-dev
-libavahi-client-dev libsoxr-dev libplist-dev libsodium-dev libgcrypt20-dev
+libavahi-client-dev libsoxr-dev libplist-dev libplist-utils libsodium-dev libgcrypt20-dev
 uuid-dev libavcodec-dev libavformat-dev libavutil-dev libswresample-dev
 libglib2.0-dev
 
