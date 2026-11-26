@@ -1,0 +1,13 @@
+#!/bin/sh
+# openHC's on-screen web view, run from openHC's own root: the webview program
+# needs WPE WebKit's WPE Platform API (DRM) and Mesa's sgx driver, and Debian
+# has neither. debian/build.sh puts openHC's Buildroot root, minus what the view
+# doesn't use, in $R. S95ohc-display starts this as it starts webview on openHC.
+#
+# A private mount namespace gives that root the box's /dev, /proc, /sys, /run
+# (udev for libinput, the control FIFO, HOME) and /tmp; the mounts go with it.
+R=/usr/lib/openhc/display
+exec unshare -m --propagation private sh -c '
+for d in dev proc sys run tmp; do mount --rbind "/$d" "$0/$d"; done
+mount --bind /etc/resolv.conf "$0/etc/resolv.conf"
+exec chroot "$0" /usr/bin/webview' "$R"

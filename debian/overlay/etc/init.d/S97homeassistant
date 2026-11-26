@@ -21,6 +21,12 @@ run() {
     # Retained MQTT discovery for the IO iod does not announce (and Zigbee's
     # permit join); mosquitto keeps nothing across a restart.
     /opt/ha/bin/ohc-ha-discovery 2>&1 | logger -t homeassistant
+    # A first start: HA's own default config, plus the box's screen's login.
+    C="$HA_DIR/config"
+    if [ ! -e "$C/configuration.yaml" ]; then
+        cp /opt/ha/configuration.yaml "$C/"
+        echo '[]' > "$C/automations.yaml"; : > "$C/scripts.yaml"; : > "$C/scenes.yaml"
+    fi
     while :; do
         rm -f "$TMPDIR/hass.rc"
         { hass --config "$HA_DIR/config"; echo $? >"$TMPDIR/hass.rc"; } 2>&1 \

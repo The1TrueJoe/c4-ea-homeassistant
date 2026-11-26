@@ -7,7 +7,7 @@
 # ones a newer openHC adds. That is what keeps this image in step with openHC
 # without a list per release.
 SKIP="S00kexec S01seedrng S01syslogd S02klogd S02sysctl S02watchdog
-S10udevd S30dbus-daemon S40network S44ntpd S50crond S50dropbear S95ohc-display"
+S10udevd S30dbus-daemon S40network S44ntpd S50crond S50dropbear"
 
 skip() { for s in $SKIP; do [ "$1" = "$s" ] && return 0; done; return 1; }
 

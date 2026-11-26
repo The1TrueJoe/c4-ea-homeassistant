@@ -10,6 +10,8 @@ on the box's HA device (iod's) and iod's availability topic:
   serial ports                   notify (write), select (baud), event (rx)
   Zigbee                         switch "permit join" (opens joining for 254 s),
                                  on zigbee-bridge's own availability
+  on-screen web view             text (its URL), buttons (arrow keys, Enter,
+                                 Back, reload), notify (types into the page)
 
 notify, not text: a text entity caps its value at 255 characters, and a
 Pronto code is usually longer.
@@ -94,6 +96,19 @@ def configs(io, mqtt):
                  availability=[{"topic": f"{z}/state", "value_template": "{{ value_json.state }}",
                                 "payload_available": "online", "payload_not_available": "offline"}],
                  icon="mdi:zigbee")
+    # The on-screen web view (S95ohc-display, iod passes these to it): the
+    # page, a remote's keys, typing into the focused field.
+    d = f"{base}/cmd/display"
+    yield entity("text", "screen_url", "Screen URL", command_topic=f"{d}/url",
+                 mode="text", icon="mdi:monitor-dashboard")
+    yield entity("notify", "screen_type", "Screen type text", command_topic=f"{d}/text",
+                 icon="mdi:keyboard")
+    yield entity("button", "screen_reload", "Screen reload", command_topic=f"{d}/reload",
+                 icon="mdi:refresh")
+    for k, icon in (("Up", "arrow-up"), ("Down", "arrow-down"), ("Left", "arrow-left"),
+                    ("Right", "arrow-right"), ("Enter", "keyboard-return"), ("Back", "arrow-u-left-top")):
+        yield entity("button", f"screen_key_{k.lower()}", f"Screen {k}",
+                     command_topic=f"{d}/key", payload_press=k, icon=f"mdi:{icon}")
 
 
 def main():

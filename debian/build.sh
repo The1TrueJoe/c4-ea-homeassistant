@@ -55,6 +55,20 @@ cp -a "$O/opt/." "$R/opt/"
 cp -a "$O/lib/modules" "$O/lib/firmware" "$R/usr/lib/"
 cp -a "$O/boot/." "$R/boot/"
 [ -d "$O/usr/share/udhcpc" ] && cp -a "$O/usr/share/udhcpc" "$R/usr/share/"
+# The on-screen web view: openHC's webview needs WPE WebKit's WPE Platform API
+# and Mesa's sgx driver, which Debian doesn't have, so it runs from openHC's own
+# root (usr/bin/webview in the overlay chroots into it), minus what it never uses.
+D=$R/usr/lib/openhc/display
+mkdir -p "$D"
+for d in bin sbin lib usr etc; do debugfs -R "rdump /$d $D" "$IN/rootfs.ext2" 2>/dev/null || true; done
+ln -sfn lib "$D/lib64"
+rm -rf "$D/lib/modules" "$D/lib/firmware" "$D/usr/bin/node" "$D/usr/lib/node_modules" \
+    "$D/usr/bin/librespot" "$D/usr/bin/mpd" "$D/usr/share/zwave-js-config" "$D/usr/include"
+find "$D" -name '*.a' -delete
+mkdir -p "$D/dev" "$D/proc" "$D/sys" "$D/run" "$D/tmp" "$D/var"
+rm -f "$D/etc/resolv.conf"; : > "$D/etc/resolv.conf"
+if [ -x "$D/usr/bin/webview" ]; then echo "   display root: $(du -sm "$D" | cut -f1) MB"
+else rm -rf "$D"; echo "   no webview in openHC's root: no on-screen view"; fi
 # Debian's busybox udhcpc runs /etc/udhcpc/default.script (Buildroot's:
 # /usr/share/udhcpc/): without it a lease "succeeds" and sets no address.
 mkdir -p "$R/etc/udhcpc"
@@ -85,6 +99,7 @@ printf 'variant=debian-%s homeassistant\n' "$SUITE" >> "$R/etc/openhc-release"
 
 echo ">> this repo's layer"
 cp -a "$HERE/overlay/." "$R/"
+[ -d "$D" ] || rm -f "$R/usr/bin/webview"
 
 echo ">> uv, and HA's Python (baseline x86-64: the EA's Atom has no SSE4)"
 UV_VERSION=${UV_VERSION:-0.13.10}

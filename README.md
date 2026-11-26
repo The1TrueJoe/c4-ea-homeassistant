@@ -25,10 +25,15 @@ replaced by Debian trixie:
   AirPlay 2 and nqptp 1.2.9 (Debian's shairport-sync is classic AirPlay only),
   so openHC's AirPlay endpoints are AirPlay 2 here too; and openHC's ALSA tone
   plugin against Debian's alsa-lib.
+- **openHC's on-screen web view,** from its Buildroot root: WPE WebKit with the
+  WPE Platform API and Mesa's `sgx` driver, which Debian doesn't ship. The
+  image keeps that root (about 290 MB, minus what the view never uses) in
+  `/usr/lib/openhc/display`, and `/usr/bin/webview` runs openHC's webview in
+  it, so the HDMI output can show Home Assistant.
 - **This repo:** [`debian/`](debian): the package list, the build, and an
   overlay with Home Assistant (`S97homeassistant`), Music Assistant and its
   squeezelite players (`S98music-assistant`), and the MQTT discovery for the
-  box's IR, serial and Zigbee joining (`ohc-ha-discovery`).
+  box's IR, serial, Zigbee joining and screen (`ohc-ha-discovery`).
 
 openHC's boot scripts run as they do on Buildroot, in order, from one systemd
 unit (`openhc.service` → `/usr/lib/openhc/rc`), minus the ones for the base
@@ -92,3 +97,9 @@ git add openHC && git commit -m "openHC: bump to <sha>"
       bluetooth-bridge scanning (about 20 nearby devices on MQTT) and its MQTT
       discovery in Home Assistant. A decoded sensor: none in range yet. The
       image picks the kernel half up when the openHC submodule moves past it.
+- [x] Home Assistant on the HDMI output: openHC's web view from its own root,
+      on the EA-3's SGX GPU, logged in through HA's trusted networks for
+      127.0.0.1; URL, keys (MQTT and HA buttons) and theme driven remotely.
+      Tested on the EA-3 by installing the pieces on it, headless (a forced
+      720p EDID, screenshots from the scanout buffer): not yet on a monitor or
+      from a freshly flashed image.

@@ -1,0 +1,12 @@
+#!/bin/sh
+# A 1 GB swap file on p1. Home Assistant, Music Assistant and the on-screen web
+# view together fill an EA-3's RAM; with no swap the kernel evicts program code
+# instead and the box stalls on the eMMC. After S03growfs, which makes the room.
+F=/var/swapfile
+[ "$1" = start ] || exit 0
+if [ ! -f "$F" ]; then
+    fallocate -l 1G "$F.new" && chmod 600 "$F.new" && mkswap -q "$F.new" && mv "$F.new" "$F" \
+        || { rm -f "$F.new"; echo "swapfile: could not make $F"; exit 0; }
+fi
+swapon "$F" 2>/dev/null && echo "swapfile: $F on"
+exit 0

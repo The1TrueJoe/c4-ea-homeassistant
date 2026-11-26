@@ -165,6 +165,36 @@ receiver is classic AirPlay, not AirPlay 2.
 ![Plugins](img/ma-plugins.png)
 ![AirPlay Receiver on the box's outputs](img/ma-airplay-receiver.png)
 
+### The screen
+
+The EA's HDMI output can show Home Assistant full screen: openHC's web view
+(WPE WebKit on the EA's own GPU). It is off until you turn it on:
+
+1. On openHC's web page (`http://<ip>/`), **Display**: switch it on. The URL is
+   already this box's Home Assistant (`http://localhost:8123/`); any dashboard
+   path works (`http://localhost:8123/dashboard-tv/0`), as does any other page.
+   The theme follows the setting there (light, dark, or dark after sunset).
+2. The screen logs into Home Assistant by itself: the image's HA config trusts
+   the box's own address (`127.0.0.1`) and skips the login form for it. Every
+   other device still gets the password form. With more than one HA user, the
+   screen asks once which one to be.
+
+![Home Assistant on the EA's HDMI output](img/screen-ha.png)
+
+A USB keyboard or mouse on the box works on the page. From Home Assistant, the
+box's device has these, for a dashboard or a remote's automations:
+
+| Entity | What it does |
+|---|---|
+| `text.…_screen_url` | the page the screen shows |
+| `button.…_screen_up` … `_down`, `_left`, `_right`, `_enter`, `_back` | a remote's keys (Tab, Home and digits too, over MQTT) |
+| `button.…_screen_reload` | reload the page |
+| `notify.…_screen_type_text` | type the message into the focused field |
+
+The web view needs about 300 MB of memory on top of Home Assistant and Music
+Assistant. The image keeps a 1 GB swap file (`/var/swapfile`) so the EA-3
+doesn't stall when everything runs at once.
+
 ### Notes
 
 - The EA's CPU (an Atom without SSE4.2 or POPCNT) cannot run code built for
@@ -207,6 +237,7 @@ appears through zigbee-bridge. IR and serial are on the same topics, for
 | `openhc/<box>/cmd/serial/<N>/write` | bytes to write |
 | `openhc/<box>/event/serial/<N>/rx` | `{"b64": …}` received bytes |
 | `openhc/<box>/zigbee/bridge/request/permit_join` | `{"time": 254}` opens Zigbee joining (zigbee-bridge's MQTT API) |
+| `openhc/<box>/cmd/display/url`, `…/key`, `…/text`, `…/reload` | the HDMI web view (turned on under **Display**): open a page, press a key (`Up`, `Enter`, `Back`, ...), type text, reload |
 
 ### Audio, for your Music Assistant
 
