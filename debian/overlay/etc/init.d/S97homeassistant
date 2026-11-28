@@ -6,6 +6,13 @@
 # syslog as homeassistant. A crash restarts it; an exit 0 (stopped from the UI)
 # does not. HA restarts itself in place (execv), so that needs nothing here.
 . /etc/ha-core.conf
+# HOMEASSISTANT=off: Music Assistant only (the flasher writes this file for
+# that choice). Home Assistant is then neither installed nor started.
+[ -r /etc/ohc-apps.conf ] && . /etc/ohc-apps.conf
+if [ "$HOMEASSISTANT" = off ] && [ "$1" = start ]; then
+    echo "homeassistant: off (/etc/ohc-apps.conf)"
+    exit 0
+fi
 PIDFILE=/var/run/homeassistant.pid
 V="$HA_DIR/venv"
 

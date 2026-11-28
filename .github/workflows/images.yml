@@ -68,3 +68,47 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ github.event.release.tag_name }}" "$ZIP" --clobber
+
+  # The rolling `dev` pre-release: what the openHC flasher downloads until there
+  # is a published release. Every board builds on each push, so each board's
+  # zip is replaced by this commit's (openhc-ha-<board>-<sha>.zip).
+  dev-release:
+    needs: image
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: dev-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: openhc-ha-*
+          path: bundles
+          merge-multiple: true
+      - name: Publish to the dev pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if ! ls bundles/openhc-ha-*.zip >/dev/null 2>&1; then
+            echo "no images built in this run: dev release unchanged"; exit 0
+          fi
+          ls -l bundles
+          if gh api "repos/$GH_REPO/git/refs/tags/dev" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/dev" -f sha="$GITHUB_SHA" -F force=true >/dev/null
+          else
+            gh api -X POST "repos/$GH_REPO/git/refs" -f ref=refs/tags/dev -f sha="$GITHUB_SHA" >/dev/null
+          fi
+          gh release view dev >/dev/null 2>&1 || gh release create dev --prerelease --title "dev (rolling)" \
+            --notes "Rolling builds of main, one zip per EA board (openhc-ha-<board>-<sha>.zip). The openHC flasher installs these when you pick Home Assistant or Music Assistant only."
+          existing=$(gh release view dev --json assets -q '.assets[].name')
+          for z in bundles/openhc-ha-*.zip; do
+            n=$(basename "$z")
+            board=$(echo "$n" | sed -E 's/^openhc-ha-(.*)-[0-9a-f]{7,}(-dirty)?\.zip$/\1/')
+            for old in $(echo "$existing" | grep -E "^openhc-ha-${board}-[0-9a-f]{7,}(-dirty)?\.zip$" || true); do
+              [ "$old" = "$n" ] || gh release delete-asset dev "$old" --yes
+            done
+            gh release upload dev "$z" --clobber
+            echo "dev: $n"
+          done

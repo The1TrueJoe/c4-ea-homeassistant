@@ -1,105 +1,79 @@
 # c4-ea-homeassistant
 
 Home Assistant and Music Assistant on Control4 EA-series controllers (EA-1,
-EA-3, EA-5), on top of [openHC](https://github.com/The1TrueJoe/openHC).
+EA-3, EA-5), on top of [openHC](https://github.com/The1TrueJoe/openHC). Turn an
+EA you no longer use with Control4 into a home automation hub and a music
+player:
 
-**Installing:** [docs/install.md](docs/install.md). It covers both ways to run
-an EA: this image (openHC + Home Assistant), or plain openHC for a Control4
-system.
+- **Home Assistant** on the box, with the EA's relays, contact inputs, IR
+  outputs, IR receiver and serial ports already in it as entities.
+- **Zigbee** on the EA's built-in radio: pair bulbs, sensors and switches from
+  any brand straight into Home Assistant.
+- **Bluetooth LE** sensors (EA-3) in Home Assistant, with no pairing.
+- **Music Assistant** playing to every audio output (analog, coax, HDMI), and
+  each output an **AirPlay 2** speaker for your phone.
+- **Home Assistant on the TV** from the EA's HDMI output, driven by a USB
+  keyboard or from Home Assistant itself.
 
-## What the image is
+Or install **Music Assistant only**, for a music player without Home Assistant.
 
-openHC's own image bundle for the board, with its Buildroot root filesystem
-replaced by Debian trixie:
+## Install
 
-- **From openHC, unchanged:** the kernel, the bootstrap kernel and boot-init
-  (what the flasher writes to the eMMC slots), the full kernel in `/boot` that
-  the bootstrap kexecs into, `/lib/modules`, `/lib/firmware`, the daemons in
-  `/opt/ohc` (iod, audiod, sysmond, webd, the Zigbee/Z-Wave/Bluetooth bridges,
-  all static binaries), and `/etc` where Debian has nothing of the same name:
-  openHC's init scripts, `asound.conf`, udev rules, MQTT and mDNS config.
-- **From Debian:** the base system, plus the programs openHC's scripts start
-  (mosquitto, avahi, hostapd, ...) and what Home Assistant needs, including a
-  compiler for the few requirements PyPI has no wheel of.
-- **Built in the image, as openHC builds them:** shairport-sync 5.6.3 with
-  AirPlay 2 and nqptp 1.2.9 (Debian's shairport-sync is classic AirPlay only),
-  so openHC's AirPlay endpoints are AirPlay 2 here too; and openHC's ALSA tone
-  plugin against Debian's alsa-lib.
-- **openHC's on-screen web view,** from its Buildroot root: WPE WebKit with the
-  WPE Platform API and Mesa's `sgx` driver, which Debian doesn't ship. The
-  image keeps that root (about 290 MB, minus what the view never uses) in
-  `/usr/lib/openhc/display`, and `/usr/bin/webview` runs openHC's webview in
-  it, so the HDMI output can show Home Assistant.
-- **This repo:** [`debian/`](debian): the package list, the build, and an
-  overlay with Home Assistant (`S97homeassistant`), Music Assistant and its
-  squeezelite players (`S98music-assistant`), and the MQTT discovery for the
-  box's IR, serial, Zigbee joining and screen (`ohc-ha-discovery`).
+You need the EA on your network and a Mac, Windows or Linux computer on the
+same network. No serial cable, no opening the box.
 
-openHC's boot scripts run as they do on Buildroot, in order, from one systemd
-unit (`openhc.service` → `/usr/lib/openhc/rc`), minus the ones for the base
-system that Debian provides. `S00kexec`, the handoff from the bootstrap kernel
-to the full one, runs before systemd (`/usr/sbin/init.openhc`), and so does a
-first-boot guard: no network address within five minutes of the first boot
-puts the box back in openHC's SSH installer instead of leaving it dark. The
-journal is persistent, so that boot can be read from p1 afterwards.
+1. Download **ohc-flasher** for your computer from
+   [openHC's releases](https://github.com/The1TrueJoe/openHC/releases).
+2. Open it. It finds the Control4 controllers on your network; pick your EA.
+3. On **What should this controller run?**, pick **Home Assistant** or
+   **Music Assistant only**. The flasher downloads the right image for your
+   EA by itself.
+4. Press **Install** and leave the box powered until the flasher says it is
+   done (a few minutes; the box restarts twice).
+5. On its first start the box installs Home Assistant and Music Assistant from
+   the internet. On the EA that takes 20–40 minutes. Then open:
+   - Home Assistant: `http://<box address>:8123`
+   - Music Assistant: `http://<box address>:8095`
+   - openHC's own page (audio, display, network): `http://<box address>/`
 
-**Keeping up with openHC** is a submodule bump: kernel, driver, firmware,
-daemon and config changes all come from openHC's bundle for the pinned
-commit. This repo only changes when openHC starts a new compiled program
-(its Debian package goes in [`debian/packages`](debian/packages)) or adds a
-base-system script that systemd replaces (it joins the skip list in
-[`debian/overlay/usr/lib/openhc/rc`](debian/overlay/usr/lib/openhc/rc)).
+The **[guide](docs/install.md)** walks through the rest: connecting the box's
+IO and Zigbee in Home Assistant, setting up Music Assistant's players,
+AirPlay, and the screen.
 
-Home Assistant and Music Assistant install on the box on first boot, into
-venvs on `/data`, with the image's own Python (the plain x86-64 build: the
-EA's Atom has no SSE4.2). Versions: `/etc/ha-core.conf`,
-`/etc/music-assistant.conf`; bumping one upgrades on the next start.
+Installing erases what was on the box's system partition. Control4's factory
+recovery stays on the box, and openHC's
+[Recovery](https://the1truejoe.github.io/openHC/shared/recovery/) page explains
+how to go back to Control4.
 
-## Building
+Already have Home Assistant on another machine? Install plain **openHC**
+instead; the guide's second half shows how your Home Assistant and Music
+Assistant use the box over MQTT.
 
-```sh
-git submodule update --init
-make image BOARD=ea3-v1          # fetches openHC's bundle for the submodule's commit (gh)
-make image BOARD=ea3-v1 OPENHC_BUNDLE=path/to/openhc-ea3-v1-….zip
-make boards                      # ea1-v1 ea1-v2 ea1-v2-poe ea3-v1 ea3-v2 ea5-v1 ea5-v2
-```
+## Logging in
 
-`make image` runs [`debian/build.sh`](debian/build.sh) in a privileged
-`debian:trixie` container (mmdebstrap) and writes
-`output/openhc-ha-<board>.zip`, which the flasher installs like openHC's own.
-CI ([`images.yml`](.github/workflows/images.yml)) builds every EA board on
-each push and attaches the zips to a release. It needs openHC's CI to have
-built images for the pinned commit.
-
-Bump openHC:
-
-```sh
-git -C openHC fetch && git -C openHC checkout <commit>
-git add openHC && git commit -m "openHC: bump to <sha>"
-```
+SSH: `ssh root@<box address>`, password `openhc`. Change it with `passwd`.
 
 ## Status
 
-- [x] The Debian image on an EA-3 (installed over SSH, no serial): systemd,
-      openHC's services and IO, eth0 up; HA and MA installed on first boot.
-- [x] openHC IO in Home Assistant over MQTT discovery: relays and contacts
-      from iod; IR, serial and Zigbee joining from `ohc-ha-discovery`.
-      Relay switched from HA on the EA-3 (iod reported it on and off).
-- [x] Zigbee through openHC's zigbee-bridge (MQTT discovery); network formed
-      on the EA-3's EM357, permit join in HA. A paired device: not yet.
-- [x] Music Assistant with a squeezelite player per output; played to the
-      EA-3's analog output from Home Assistant (the analog PCM running).
-- [x] openHC's AirPlay 2 endpoints (shairport-sync and nqptp built in the
-      image), one per output, advertised as AirPlay 2.
-- [x] The Debian image boots in QEMU on openHC's full kernel.
-- [x] Bluetooth LE: the EA-3's onboard AR3012 up as hci0 with openHC's next
-      kernel (ath3k and its firmware; tested by loading them on the EA-3),
-      bluetooth-bridge scanning (about 20 nearby devices on MQTT) and its MQTT
-      discovery in Home Assistant. A decoded sensor: none in range yet. The
-      image picks the kernel half up when the openHC submodule moves past it.
-- [x] Home Assistant on the HDMI output: openHC's web view from its own root,
-      on the EA-3's SGX GPU, logged in through HA's trusted networks for
-      127.0.0.1; URL, keys (MQTT and HA buttons) and theme driven remotely.
-      Tested on the EA-3 by installing the pieces on it, headless (a forced
-      720p EDID, screenshots from the scanout buffer): not yet on a monitor or
-      from a freshly flashed image.
+Tested on an EA-3:
+
+- [x] Home Assistant and Music Assistant install and run; the box's relays and
+      contacts work from Home Assistant.
+- [x] Music Assistant plays to the analog output; AirPlay 2 on every output.
+- [x] Zigbee network formed, joining from Home Assistant. A paired device: not
+      yet.
+- [x] Bluetooth LE devices seen on MQTT and in Home Assistant. A decoded
+      sensor: not yet.
+- [x] Home Assistant on the HDMI output, keys and page driven from Home
+      Assistant (tested without a monitor attached).
+- [ ] EA-1 and EA-5 on real hardware.
+- [ ] Music Assistant only, on real hardware.
+
+## Contributing
+
+How the image is built, and how to work on it:
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+MIT.

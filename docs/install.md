@@ -9,11 +9,11 @@ Two ways to use an EA-1, EA-3 or EA-5 with Home Assistant. Pick one per box:
 | IO (relays, contacts, IR, serial) | entities in the box's own HA | entities in your HA, over your MQTT broker |
 | Zigbee (the EA's radio) | devices in the box's HA | devices in your HA, over your MQTT broker |
 | Audio outputs | Music Assistant players on the box; AirPlay 2 | players for your Music Assistant: AirPlay 2, Sendspin, squeezelite |
-| Image | `openhc-ha-<board>-<version>.zip` (this repo) | `openhc-<board>-<version>.zip` ([openHC](https://github.com/The1TrueJoe/openHC/releases)) |
+| Pick in the flasher | **Home Assistant** (or **Music Assistant only**) | **openHC** |
 
-Both install the same way, with openHC's flasher. It works over the network
-with no serial cable and no lid off, and it identifies the box before it
-writes anything. Read openHC's
+Both install the same way, with openHC's flasher, which downloads the image
+for your board by itself. It works over the network with no serial cable and
+no lid off, and it identifies the box before it writes anything. Read openHC's
 [Recovery](https://the1truejoe.github.io/openHC/shared/recovery/) page first:
 it explains how each EA gets back to stock Control4.
 
@@ -23,30 +23,22 @@ factory recovery partition (p2) is never touched.
 
 ## Getting the flasher and finding the box
 
-1. Get `ohc-flasher` (GUI) for macOS, Windows or Linux from
-   [openHC's latest release](https://github.com/The1TrueJoe/openHC/releases),
-   or build the CLI (`cd openHC/flasher && cargo build --release -p ohc-flash-cli`).
-   It logs into the box over SSH and needs `sshpass`
+1. Get `ohc-flasher` for macOS, Windows or Linux from
+   [openHC's latest release](https://github.com/The1TrueJoe/openHC/releases).
+   It logs into the box over SSH and needs `sshpass` on macOS and Linux
    (`brew install sshpass`, or your distribution's package).
-2. Find the box and its board:
-
-   ```sh
-   ohc-flash discover          # Control4 controllers on this network
-   ohc-flash identify <ip>     # its board (ea3-v1, ea1-v2, ...) and what runs on it
-   ```
-
-   The GUI shows the same on its first screen. The board picks the image.
+2. Open it. Its first screen lists the Control4 controllers on your network;
+   pick the EA. The next screen says which board it is (ea3-v1, ea1-v2, ...),
+   which decides the image.
 
 ## 1. Home Assistant on the EA
 
 ### Install
 
-Download `openhc-ha-<board>-<version>.zip` for your board (this repo's
-Releases, or the `images` workflow's artifacts for a commit), then:
-
-- **GUI:** pick the box, and on the Install screen choose the zip as the image
-  bundle. Leave **Make it a Control4 controller again** unticked.
-- **CLI:** `ohc-flash install <ip> --images openhc-ha-<board>-<version>.zip`
+On **What should this controller run?**, pick **Home Assistant** (or **Music
+Assistant only**, below). The flasher downloads the image for your board, then
+**Install**. From a terminal, the same is
+`ohc-flash install <ip> --with home-assistant`.
 
 The flasher writes the kernel, reboots the box into openHC's installer,
 writes the system to p1 and reboots again. The box comes back at the same
@@ -195,6 +187,17 @@ The web view needs about 300 MB of memory on top of Home Assistant and Music
 Assistant. The image keeps a 1 GB swap file (`/var/swapfile`) so the EA-3
 doesn't stall when everything runs at once.
 
+### Music Assistant only
+
+The flasher's **Music Assistant only** installs the same image with Home
+Assistant switched off: Music Assistant, its players and AirPlay 2 work as
+above, and the box's IO and Zigbee are on its MQTT broker for any other
+system (the topics in part 2). To add Home Assistant later:
+
+```sh
+ssh root@<ip> 'rm /etc/ohc-apps.conf && /etc/init.d/S97homeassistant start'
+```
+
 ### Notes
 
 - The EA's CPU (an Atom without SSE4.2 or POPCNT) cannot run code built for
@@ -210,10 +213,8 @@ broker and, for audio, Music Assistant) uses it.
 
 ### Install
 
-Download `openhc-<board>-<version>.zip` from
-[openHC's releases](https://github.com/The1TrueJoe/openHC/releases) and install
-it with the flasher (`ohc-flash install <ip> --images openhc-<board>-<version>.zip`),
-leaving **Make it a Control4 controller again** unticked.
+In the flasher, pick **openHC** on **What should this controller run?** and
+install (`ohc-flash install <ip>` from a terminal).
 
 ### IO and Zigbee, over your MQTT broker
 
